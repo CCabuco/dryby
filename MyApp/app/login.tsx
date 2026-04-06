@@ -1,9 +1,12 @@
 import { FontAwesome, Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import {
   FacebookAuthProvider,
+  fetchSignInMethodsForEmail,
   GoogleAuthProvider,
+  signOut,
   signInWithEmailAndPassword,
   signInWithPopup,
   type User,
@@ -23,16 +26,17 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { auth, db } from "../lib/firebase";
+import { setGuestMode } from "../lib/app-state";
+import { mergeGuestCartToUser } from "../lib/cart-state";
 import {
-  getRetrySeconds,
   normalizeEmail,
-  pruneAttempts,
   sanitizeInput,
   validateEmail,
 } from "../lib/security";
 
 const MAX_LOGIN_ATTEMPTS = 5;
-const ATTEMPT_WINDOW_MS = 60_000;
+const LOCKOUT_DURATION_MS = 10 * 60_000;
+const LOGIN_LOCK_STATE_KEY = "dryby_login_lock_state";
 
 type FocusedField = "email" | "password" | "";
 
@@ -70,6 +74,7 @@ async function ensureUserDocument(user: User) {
 
   const names = splitDisplayName(user.displayName);
   const providerId = user.providerData[0]?.providerId ?? "password";
+  const initialFullName = names.fullName || "DryBy User";
 
   await setDoc(
     userRef,
@@ -78,9 +83,11 @@ async function ensureUserDocument(user: User) {
       email: user.email ?? "",
       firstName: names.firstName,
       lastName: names.lastName,
-      fullName: names.fullName,
+      fullName: initialFullName,
       mobileNumber: "",
       authProvider: providerId,
+      nameHistory: [{ name: initialFullName, changedAt: Date.now() }],
+      usernameLastChangedAt: null,
       createdAt: serverTimestamp(),
       lastLoginAt: serverTimestamp(),
     },
@@ -95,7 +102,9 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [formError, setFormError] = useState("");
-  const [failedAttempts, setFailedAttempts] = useState<number[]>([]);
+  const [consecutiveFailedAttempts, setConsecutiveFailedAttempts] = useState(0);
+  const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
+  const [lockoutSecondsLeft, setLockoutSecondsLeft] = useState(0);
   const [focusedField, setFocusedField] = useState<FocusedField>("");
 
   const webInputStyle = useMemo(
@@ -111,27 +120,123 @@ export default function LoginScreen() {
     []
   );
 
-  const recordFailedAttempt = () => {
-    setFailedAttempts((prev) => {
-      const recent = pruneAttempts(prev, ATTEMPT_WINDOW_MS);
-      return [...recent, Date.now()];
-    });
+  const formatLockoutMessage = (seconds: number) => {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `Too many failed attempts. Try again in ${minutes}m ${remainingSeconds
+      .toString()
+      .padStart(2, "0")}s.`;
   };
 
-  const getRateLimitError = () => {
-    const recent = pruneAttempts(failedAttempts, ATTEMPT_WINDOW_MS);
-    setFailedAttempts(recent);
+  React.useEffect(() => {
+    let isMounted = true;
 
-    if (recent.length < MAX_LOGIN_ATTEMPTS) {
-      return "";
+    const hydrateLoginLockState = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(LOGIN_LOCK_STATE_KEY);
+        if (!raw) {
+          return;
+        }
+
+        const parsed = JSON.parse(raw) as {
+          consecutiveFailedAttempts?: number;
+          lockoutUntil?: number | null;
+        };
+        const nextLockoutUntil =
+          typeof parsed.lockoutUntil === "number" ? parsed.lockoutUntil : null;
+
+        if (nextLockoutUntil && nextLockoutUntil <= Date.now()) {
+          await AsyncStorage.removeItem(LOGIN_LOCK_STATE_KEY);
+          if (isMounted) {
+            setConsecutiveFailedAttempts(0);
+            setLockoutUntil(null);
+            setLockoutSecondsLeft(0);
+          }
+          return;
+        }
+
+        if (isMounted) {
+          setConsecutiveFailedAttempts(
+            typeof parsed.consecutiveFailedAttempts === "number"
+              ? parsed.consecutiveFailedAttempts
+              : 0
+          );
+          setLockoutUntil(nextLockoutUntil);
+        }
+      } catch {
+        // Ignore persisted lock state errors and continue.
+      }
+    };
+
+    void hydrateLoginLockState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const persistLoginLockState = async () => {
+      try {
+        if (!consecutiveFailedAttempts && !lockoutUntil) {
+          await AsyncStorage.removeItem(LOGIN_LOCK_STATE_KEY);
+          return;
+        }
+
+        await AsyncStorage.setItem(
+          LOGIN_LOCK_STATE_KEY,
+          JSON.stringify({
+            consecutiveFailedAttempts,
+            lockoutUntil,
+          })
+        );
+      } catch {
+        // Ignore persistence errors; in-memory lock still works.
+      }
+    };
+
+    void persistLoginLockState();
+  }, [consecutiveFailedAttempts, lockoutUntil]);
+
+  React.useEffect(() => {
+    if (!lockoutUntil) {
+      setLockoutSecondsLeft(0);
+      return;
     }
 
-    const retrySeconds = getRetrySeconds(recent, ATTEMPT_WINDOW_MS);
-    return `Too many attempts. Try again in ${retrySeconds}s.`;
+    const tick = () => {
+      const remaining = Math.max(Math.ceil((lockoutUntil - Date.now()) / 1000), 0);
+      setLockoutSecondsLeft(remaining);
+
+      if (remaining === 0) {
+        setLockoutUntil(null);
+        setConsecutiveFailedAttempts(0);
+      }
+    };
+
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [lockoutUntil]);
+
+  const registerFailedAttempt = (message: string) => {
+    const nextAttempts = consecutiveFailedAttempts + 1;
+
+    if (nextAttempts >= MAX_LOGIN_ATTEMPTS) {
+      const nextLockoutUntil = Date.now() + LOCKOUT_DURATION_MS;
+      setLockoutUntil(nextLockoutUntil);
+      setConsecutiveFailedAttempts(0);
+      setFormError("Too many failed attempts. Login is disabled for 10 minutes.");
+      return;
+    }
+
+    setConsecutiveFailedAttempts(nextAttempts);
+    setFormError(message);
   };
 
   const handleLogin = async () => {
     const normalizedEmail = normalizeEmail(email);
+    const isLockedOut = !!lockoutUntil && lockoutUntil > Date.now();
 
     if (!normalizedEmail || !password) {
       setFormError("Please enter email and password.");
@@ -143,9 +248,8 @@ export default function LoginScreen() {
       return;
     }
 
-    const rateLimitError = getRateLimitError();
-    if (rateLimitError) {
-      setFormError(rateLimitError);
+    if (isLockedOut) {
+      setFormError(formatLockoutMessage(lockoutSecondsLeft));
       return;
     }
 
@@ -153,38 +257,63 @@ export default function LoginScreen() {
     setFormError("");
 
     try {
+      const methods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
+      if (!methods.length) {
+        registerFailedAttempt("Account does not exist.");
+        return;
+      }
+
+      if (!methods.includes("password")) {
+        setFormError("This account uses Google/Facebook sign-in. Use a social login button.");
+        return;
+      }
+
       const credential = await signInWithEmailAndPassword(
         auth,
         normalizedEmail,
         password
       );
 
+      setConsecutiveFailedAttempts(0);
+      setLockoutUntil(null);
+      setLockoutSecondsLeft(0);
       await ensureUserDocument(credential.user);
+      await setGuestMode(false);
+      await mergeGuestCartToUser(credential.user.uid);
       router.replace("/(tabs)");
     } catch (error: any) {
-      recordFailedAttempt();
-
       let message = "Unable to sign in right now. Please try again.";
       if (error?.code === "auth/wrong-password") {
         message = "Incorrect password.";
       } else if (error?.code === "auth/invalid-credential") {
-        message = "Invalid email or password.";
+        message = "Incorrect password.";
       } else if (error?.code === "auth/user-not-found") {
-        message =
-          "No email/password account found for this email. If you used Google or Facebook, use that sign-in button.";
+        message = "Account does not exist.";
       } else if (error?.code === "auth/invalid-email") {
         message = "Please enter a valid email address.";
       } else if (error?.code === "auth/too-many-requests") {
         message = "Too many attempts. Please try again later.";
       }
-
-      setFormError(message);
+      if (
+        error?.code === "auth/invalid-email" ||
+        error?.code === "auth/too-many-requests"
+      ) {
+        setFormError(message);
+      } else {
+        registerFailedAttempt(message);
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleSocialLogin = async (providerType: "google" | "facebook") => {
+    const isLockedOut = !!lockoutUntil && lockoutUntil > Date.now();
+    if (isLockedOut) {
+      setFormError(formatLockoutMessage(lockoutSecondsLeft));
+      return;
+    }
+
     if (Platform.OS !== "web") {
       setFormError(
         "Google/Facebook sign-in on native needs expo-auth-session provider setup."
@@ -207,6 +336,8 @@ export default function LoginScreen() {
 
       const credential = await signInWithPopup(auth, provider);
       await ensureUserDocument(credential.user);
+      await setGuestMode(false);
+      await mergeGuestCartToUser(credential.user.uid);
       router.replace("/(tabs)");
     } catch (error: any) {
       let message = "Unable to sign in with provider right now.";
@@ -229,6 +360,7 @@ export default function LoginScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView
+          style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
@@ -306,12 +438,23 @@ export default function LoginScreen() {
             {!!formError && <Text style={styles.errorText}>{formError}</Text>}
 
             <TouchableOpacity
-              style={[styles.primaryButton, isLoading && styles.disabledButton]}
+              style={[
+                styles.primaryButton,
+                (isLoading || lockoutSecondsLeft > 0) && styles.disabledButton,
+              ]}
               onPress={handleLogin}
-              disabled={isLoading}
+              disabled={isLoading || lockoutSecondsLeft > 0}
             >
               <Text style={styles.primaryButtonText}>
-                {isLoading ? "Signing in..." : "Sign in"}
+                {isLoading
+                  ? "Signing in..."
+                  : lockoutSecondsLeft > 0
+                  ? `Locked (${Math.floor(lockoutSecondsLeft / 60)}m ${(
+                      lockoutSecondsLeft % 60
+                    )
+                      .toString()
+                      .padStart(2, "0")}s)`
+                  : "Sign in"}
               </Text>
             </TouchableOpacity>
 
@@ -349,8 +492,24 @@ export default function LoginScreen() {
               <FontAwesome name="facebook" size={18} color="#1877F2" />
               <Text style={styles.socialText}>Continue with Facebook</Text>
             </TouchableOpacity>
+
           </View>
+
         </ScrollView>
+
+        <TouchableOpacity
+          style={styles.skipNowBtn}
+          onPress={async () => {
+            if (auth.currentUser) {
+              await signOut(auth);
+            }
+            await setGuestMode(true);
+            router.replace("/(tabs)");
+          }}
+          disabled={isLoading}
+        >
+          <Text style={styles.skipNowText}>Skip this for now</Text>
+        </TouchableOpacity>
       </KeyboardAvoidingView>
     </LinearGradient>
   );
@@ -363,6 +522,10 @@ const styles = StyleSheet.create({
   },
 
   flex: {
+    flex: 1,
+  },
+
+  scroll: {
     flex: 1,
   },
 
@@ -552,5 +715,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#111827",
     fontWeight: "600",
+  },
+
+  skipNowBtn: {
+    position: "absolute",
+    right: 20,
+    bottom: 14,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+  },
+
+  skipNowText: {
+    fontSize: 13,
+    color: "#FFFFFF",
+    fontWeight: "700",
   },
 });

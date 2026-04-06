@@ -1,7 +1,7 @@
 import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
-import { confirmPasswordReset, verifyPasswordResetCode } from "firebase/auth";
+import { confirmPasswordReset, signOut, verifyPasswordResetCode } from "firebase/auth";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Image,
@@ -14,10 +14,14 @@ import {
   View,
 } from "react-native";
 import { auth } from "../lib/firebase";
-import { getPasswordIssue } from "../lib/security";
+import { getPasswordIssue, getPasswordStrength } from "../lib/security";
 
 export default function ChangePasswordScreen() {
-  const params = useLocalSearchParams<{ oobCode?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    oobCode?: string | string[];
+    mode?: string | string[];
+    continueUrl?: string | string[];
+  }>();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -28,15 +32,52 @@ export default function ChangePasswordScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const passwordStrength = useMemo(() => getPasswordStrength(password), [password]);
+
+  const mode = useMemo(() => {
+    if (Array.isArray(params.mode)) {
+      return params.mode[0] ?? "";
+    }
+    return params.mode ?? "";
+  }, [params.mode]);
 
   const oobCode = useMemo(() => {
-    if (Array.isArray(params.oobCode)) {
-      return params.oobCode[0] ?? "";
+    const readDirectCode = () => {
+      if (Array.isArray(params.oobCode)) {
+        return params.oobCode[0] ?? "";
+      }
+      return params.oobCode ?? "";
+    };
+
+    const directCode = readDirectCode();
+    if (directCode) {
+      return directCode;
     }
-    return params.oobCode ?? "";
-  }, [params.oobCode]);
+
+    const continueUrlRaw = Array.isArray(params.continueUrl)
+      ? params.continueUrl[0]
+      : params.continueUrl;
+
+    if (!continueUrlRaw) {
+      return "";
+    }
+
+    try {
+      const parsedUrl = new URL(continueUrlRaw);
+      return parsedUrl.searchParams.get("oobCode") ?? "";
+    } catch {
+      return "";
+    }
+  }, [params.continueUrl, params.oobCode]);
 
   useEffect(() => {
+    if (mode && mode !== "resetPassword") {
+      setIsCheckingCode(false);
+      setIsCodeValid(false);
+      setErrorMessage("This action link is not a password reset request.");
+      return;
+    }
+
     const validateCode = async () => {
       if (!oobCode) {
         setIsCodeValid(false);
@@ -68,7 +109,7 @@ export default function ChangePasswordScreen() {
     };
 
     void validateCode();
-  }, [oobCode]);
+  }, [mode, oobCode]);
 
   const handleChangePassword = async () => {
     if (!isCodeValid || !oobCode) {
@@ -98,8 +139,9 @@ export default function ChangePasswordScreen() {
 
     try {
       await confirmPasswordReset(auth, oobCode, password);
+      await signOut(auth);
       setSuccessMessage(
-        "Password changed successfully. This reset link is now used and cannot be reused."
+        "Password changed successfully. For security, active sessions are signed out."
       );
       setTimeout(() => router.replace("/login"), 1200);
     } catch (error: any) {
@@ -160,6 +202,26 @@ export default function ChangePasswordScreen() {
             <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
               <Feather name={showPassword ? "eye" : "eye-off"} size={20} color="#333" />
             </TouchableOpacity>
+          </View>
+
+          <View style={styles.strengthWrap}>
+            <Text style={styles.strengthLabel}>Strength: </Text>
+            <Text
+              style={[
+                styles.strengthValue,
+                passwordStrength === "weak" && styles.weakStrength,
+                passwordStrength === "medium" && styles.mediumStrength,
+                passwordStrength === "strong" && styles.strongStrength,
+              ]}
+            >
+              {password ? passwordStrength : "not set"}
+            </Text>
+          </View>
+
+          <View style={styles.rulesBox}>
+            <Text style={styles.ruleItem}>- At least 8 characters</Text>
+            <Text style={styles.ruleItem}>- Avoid common passwords</Text>
+            <Text style={styles.ruleItem}>- Use a passphrase you can remember</Text>
           </View>
 
           <Text style={styles.label}>Confirm Password</Text>
@@ -358,5 +420,51 @@ const styles = StyleSheet.create({
     color: "#1D4ED8",
     fontSize: 13,
     fontWeight: "700",
+  },
+
+  strengthWrap: {
+    marginTop: 6,
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  strengthLabel: {
+    color: "#475467",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+
+  strengthValue: {
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "capitalize",
+  },
+
+  weakStrength: {
+    color: "#B00020",
+  },
+
+  mediumStrength: {
+    color: "#C27803",
+  },
+
+  strongStrength: {
+    color: "#0A8F43",
+  },
+
+  rulesBox: {
+    width: "100%",
+    backgroundColor: "#EDF5FF",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginTop: 8,
+  },
+
+  ruleItem: {
+    color: "#27496D",
+    fontSize: 12,
+    lineHeight: 17,
   },
 });

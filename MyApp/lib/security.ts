@@ -30,7 +30,8 @@ export function containsBlockedContent(value: string): boolean {
 }
 
 export function validateName(value: string): boolean {
-  return /^[A-Za-z]{2,50}$/.test(value);
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return /^[A-Za-z]+(?: [A-Za-z]+)*$/.test(normalized) && normalized.length >= 2 && normalized.length <= 50;
 }
 
 export function validateEmail(value: string): boolean {
@@ -61,6 +62,25 @@ export function getPasswordIssue(value: string): string {
   }
 
   return "";
+}
+
+export function getPasswordStrength(value: string): "weak" | "medium" | "strong" {
+  const lengthScore = value.length >= 12 ? 2 : value.length >= 8 ? 1 : 0;
+  const varietyScore =
+    (/[a-z]/.test(value) ? 1 : 0) +
+    (/[A-Z]/.test(value) ? 1 : 0) +
+    (/\d/.test(value) ? 1 : 0) +
+    (/[^A-Za-z0-9]/.test(value) ? 1 : 0);
+
+  const score = lengthScore + (varietyScore >= 3 ? 1 : 0);
+
+  if (score >= 3) {
+    return "strong";
+  }
+  if (score >= 1) {
+    return "medium";
+  }
+  return "weak";
 }
 
 export function pruneAttempts(attempts: number[], windowMs = 60000): number[] {

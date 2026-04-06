@@ -2,14 +2,43 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect } from "react";
 import { Image, StyleSheet, View } from "react-native";
+import { auth } from "../lib/firebase";
+import { hasSeenOnboarding, isGuestMode } from "../lib/app-state";
 
 export default function Index() {
   useEffect(() => {
+    let mounted = true;
+
     const timeout = setTimeout(() => {
-      router.replace("/onboarding");
+      void (async () => {
+        const onboardingDone = await hasSeenOnboarding();
+        if (!mounted) {
+          return;
+        }
+
+        if (!onboardingDone) {
+          router.replace("/onboarding");
+          return;
+        }
+
+        if (auth.currentUser) {
+          router.replace("/(tabs)");
+          return;
+        }
+
+        const guestMode = await isGuestMode();
+        if (!mounted) {
+          return;
+        }
+
+        router.replace(guestMode ? "/(tabs)" : "/login");
+      })();
     }, 1800);
 
-    return () => clearTimeout(timeout);
+    return () => {
+      mounted = false;
+      clearTimeout(timeout);
+    };
   }, []);
 
   return (

@@ -1,0 +1,81 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function shopOwnerUid(shopId) {
+      return get(/databases/$(database)/documents/laundryShops/$(shopId)).data.ownerUid;
+    }
+
+    function isShopOwner(shopId) {
+      return signedIn() && shopOwnerUid(shopId) == request.auth.uid;
+    }
+
+    // User profile
+    match /users/{uid} {
+      allow read, create, update: if signedIn() && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
+    // Main shop collection
+    match /laundryShops/{shopId} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+
+      // Shop services managed by owner, visible to all users
+      match /services/{serviceId} {
+        allow read: if true;
+        allow create, update, delete: if isShopOwner(shopId);
+      }
+
+      // Shop orders: customers create/read own; owners read/update all for their shop
+      match /orders/{orderId} {
+        allow create: if signedIn()
+          && request.resource.data.customerUid == request.auth.uid
+          && request.resource.data.shopId == shopId;
+
+        allow read: if signedIn()
+          && (resource.data.customerUid == request.auth.uid || isShopOwner(shopId));
+
+        allow update: if signedIn()
+          && (isShopOwner(shopId) || resource.data.customerUid == request.auth.uid);
+
+        allow delete: if false;
+      }
+    }
+
+    // User-facing transaction history
+    match /transactions/{transactionId} {
+      allow create: if signedIn() && request.resource.data.userUid == request.auth.uid;
+      allow read, update: if signedIn() && resource.data.userUid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // Optional top-level collections used by account audit sync
+    match /orders/{orderId} {
+      allow create: if signedIn() && request.resource.data.userUid == request.auth.uid;
+      allow read, update: if signedIn() && resource.data.userUid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /laundries/{laundryId} {
+      allow create: if signedIn() && request.resource.data.userUid == request.auth.uid;
+      allow read, update: if signedIn() && resource.data.userUid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // Public announcements for everyone
+    match /announcements/{announcementId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -35,17 +35,19 @@ export default function AnnouncementsScreen() {
   return (
     <LinearGradient colors={["#55B7E9", "#2E95D3"]} style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
-        <Text style={styles.brand}>DryBy</Text>
-        <Text style={styles.title}>Announcements</Text>
+        <View style={styles.pageContent}>
+          <Text style={styles.brand}>DryBy</Text>
+          <Text style={styles.title}>Announcements</Text>
 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.list}>
-          {announcements.map((item) => (
-            <View key={item.id} style={styles.card}>
-              <Text style={styles.cardTitle}>{item.title}</Text>
-              <Text style={styles.cardBody}>{item.body}</Text>
-            </View>
-          ))}
-        </ScrollView>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.list}>
+            {announcements.map((item) => (
+              <View key={item.id} style={styles.card}>
+                <Text style={styles.cardTitle}>{item.title}</Text>
+                <Text style={styles.cardBody}>{item.body}</Text>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -53,7 +55,13 @@ export default function AnnouncementsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  safeArea: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
+  safeArea: { flex: 1, paddingHorizontal: 12, paddingTop: 12 },
+  pageContent: {
+    flex: 1,
+    width: "100%",
+    maxWidth: 430,
+    alignSelf: "center",
+  },
   brand: {
     fontSize: 28,
     fontWeight: "800",

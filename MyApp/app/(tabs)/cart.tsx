@@ -1,44 +1,147 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import React from "react";
 import {
+  ActivityIndicator,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+import { isGuestMode, setGuestMode } from "../../lib/app-state";
+import {
+  clearCart,
+  getCartItems,
+  mergeGuestCartToUser,
+  removeCartItem,
+  type CartItem,
+} from "../../lib/cart-state";
+import { auth } from "../../lib/firebase";
 
 export default function CartScreen() {
+  const [cartItems, setCartItems] = React.useState<CartItem[]>([]);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [guestMode, setGuestModeLabel] = React.useState(false);
+
+  const loadCart = React.useCallback(async () => {
+    setIsLoading(true);
+
+    try {
+      if (typeof auth.authStateReady === "function") {
+        await auth.authStateReady();
+      }
+    } catch {
+      // Ignore and continue.
+    }
+
+    const userId = auth.currentUser?.uid;
+    if (userId) {
+      await mergeGuestCartToUser(userId);
+      await setGuestMode(false);
+      setGuestModeLabel(false);
+      setCartItems(await getCartItems(userId));
+      setIsLoading(false);
+      return;
+    }
+
+    const isGuest = await isGuestMode();
+    setGuestModeLabel(isGuest);
+    setCartItems(await getCartItems());
+    setIsLoading(false);
+  }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void loadCart();
+    }, [loadCart])
+  );
+
+  const handleRemove = async (itemId: string) => {
+    const userId = auth.currentUser?.uid;
+    const updated = await removeCartItem(itemId, userId);
+    setCartItems(updated);
+  };
+
+  const handleClear = async () => {
+    const userId = auth.currentUser?.uid;
+    await clearCart(userId);
+    setCartItems([]);
+  };
+
+  const totalQuantity = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+
   return (
     <LinearGradient colors={["#55B7E9", "#2E95D3"]} style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.headerRow}>
-          <Text style={styles.brand}>DryBy</Text>
-          <View style={styles.headerIcons}>
-            <TouchableOpacity style={styles.headerIconBtn}>
-              <Ionicons name="search-outline" size={18} color="#fff" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.headerIconBtn}>
-              <Ionicons name="notifications-outline" size={18} color="#fff" />
-            </TouchableOpacity>
+        <View style={styles.pageContent}>
+          <View style={styles.headerRow}>
+            <Text style={styles.brand}>DryBy</Text>
+            {cartItems.length > 0 ? (
+              <TouchableOpacity onPress={() => void handleClear()}>
+                <Text style={styles.clearText}>Clear cart</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
-        </View>
 
-        <Text style={styles.title}>Cart</Text>
-        <Text style={styles.subtitle}>Review your selected laundry services here.</Text>
+          <Text style={styles.title}>Cart</Text>
+          <Text style={styles.subtitle}>Review your selected laundry services here.</Text>
 
-        <View style={styles.placeholderCard} />
+          {guestMode ? (
+            <View style={styles.infoPill}>
+              <Ionicons name="person-outline" size={14} color="#1E4B79" />
+              <Text style={styles.infoPillText}>
+                Guest mode: cart is saved and will carry over after login/signup.
+              </Text>
+            </View>
+          ) : null}
 
-        <View style={styles.searchBarWrapper}>
-          <View style={styles.searchBar}>
-            <TextInput
-              placeholder="Search"
-              placeholderTextColor="#8A8A8A"
-              style={styles.searchInput}
-            />
-            <Ionicons name="search-outline" size={18} color="#8A8A8A" />
+          <View style={styles.contentCard}>
+            {isLoading ? (
+              <View style={styles.centerState}>
+                <ActivityIndicator color="#2E95D3" />
+                <Text style={styles.emptyText}>Loading cart...</Text>
+              </View>
+            ) : cartItems.length === 0 ? (
+              <View style={styles.centerState}>
+                <Ionicons name="cart-outline" size={36} color="#9CA3AF" />
+                <Text style={styles.emptyTitle}>Your cart is empty</Text>
+                <Text style={styles.emptyText}>Add laundry services from a shop to see them here.</Text>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.summaryText}>{totalQuantity} item(s) in cart</Text>
+                <ScrollView
+                  style={styles.list}
+                  contentContainerStyle={styles.listContent}
+                  showsVerticalScrollIndicator={false}
+                >
+                  {cartItems.map((item) => (
+                    <View key={item.id} style={styles.itemCard}>
+                      <View style={styles.itemTopRow}>
+                        <Text style={styles.itemShop}>{item.shopName}</Text>
+                        <Text style={styles.itemPrice}>{item.priceLabel}</Text>
+                      </View>
+                      <Text style={styles.itemTitle}>{item.title}</Text>
+                      <Text style={styles.itemAddress}>{item.address}</Text>
+                      <View style={styles.itemBottomRow}>
+                        <Text style={styles.itemMeta}>{item.distanceKm.toFixed(1)} km away</Text>
+                        <Text style={styles.itemMeta}>Qty: {item.quantity}</Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.removeButton}
+                        onPress={() => void handleRemove(item.id)}
+                      >
+                        <Ionicons name="trash-outline" size={14} color="#B00020" />
+                        <Text style={styles.removeText}>Remove</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              </>
+            )}
           </View>
         </View>
       </SafeAreaView>
@@ -47,8 +150,21 @@ export default function CartScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  safeArea: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
+  container: {
+    flex: 1,
+  },
+  safeArea: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 16,
+  },
+  pageContent: {
+    flex: 1,
+    width: "100%",
+    maxWidth: 430,
+    alignSelf: "center",
+  },
   headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -59,51 +175,130 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#F4C430",
   },
-  headerIcons: { flexDirection: "row", gap: 10 },
-  headerIconBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.35)",
-    justifyContent: "center",
-    alignItems: "center",
+  clearText: {
+    color: "#EAF7FF",
+    fontSize: 13,
+    fontWeight: "700",
   },
   title: {
-    marginTop: 18,
-    fontSize: 22,
-    fontWeight: "700",
+    marginTop: 12,
+    fontSize: 24,
+    fontWeight: "800",
     color: "#fff",
   },
   subtitle: {
-    marginTop: 6,
+    marginTop: 4,
     fontSize: 13,
     color: "#EAF7FF",
   },
-  placeholderCard: {
-    marginTop: 26,
-    height: 220,
-    borderRadius: 18,
-    backgroundColor: "#F3F3F3",
-  },
-  searchBarWrapper: {
-    position: "absolute",
-    bottom: 78,
-    left: 16,
-    right: 16,
-  },
-  searchBar: {
-    backgroundColor: "#fff",
-    borderRadius: 18,
+  infoPill: {
+    marginTop: 10,
+    borderRadius: 12,
+    backgroundColor: "#E7F4FF",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 14,
-    height: 42,
-    elevation: 6,
   },
-  searchInput: {
+  infoPillText: {
+    marginLeft: 6,
+    fontSize: 11,
+    color: "#1E4B79",
     flex: 1,
-    fontSize: 14,
-    color: "#111",
+    fontWeight: "600",
+  },
+  contentCard: {
+    marginTop: 12,
+    flex: 1,
+    borderRadius: 18,
+    backgroundColor: "rgba(248, 250, 252, 0.58)",
+    padding: 12,
+  },
+  centerState: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  emptyTitle: {
+    marginTop: 8,
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  emptyText: {
+    marginTop: 6,
+    fontSize: 13,
+    textAlign: "center",
+    color: "#6B7280",
+  },
+  summaryText: {
+    fontSize: 13,
+    color: "#475467",
+    marginBottom: 8,
+  },
+  list: {
+    flex: 1,
+  },
+  listContent: {
+    gap: 10,
+    paddingBottom: 6,
+  },
+  itemCard: {
+    borderRadius: 14,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 12,
+  },
+  itemTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  itemShop: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#111827",
+    flex: 1,
+    marginRight: 8,
+  },
+  itemPrice: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#0B6394",
+  },
+  itemTitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: "#334155",
+    fontWeight: "600",
+  },
+  itemAddress: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#64748B",
+  },
+  itemBottomRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  itemMeta: {
+    fontSize: 12,
+    color: "#475569",
+  },
+  removeButton: {
+    marginTop: 8,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  removeText: {
+    marginLeft: 4,
+    fontSize: 12,
+    color: "#B00020",
+    fontWeight: "700",
   },
 });

@@ -1,8 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
-import React from "react";
+import { router } from "expo-router";
+import { onAuthStateChanged, type User } from "firebase/auth";
+import { collection, doc, getDoc, onSnapshot } from "firebase/firestore";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  FlatList,
+  ActivityIndicator,
   Image,
   SafeAreaView,
   ScrollView,
@@ -12,107 +16,219 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { isGuestMode } from "../../lib/app-state";
+import { auth, db } from "../../lib/firebase";
+import { parseLaundryShop, type LaundryShop } from "../../lib/laundry-shops";
 
-const laundryShops = [
-  {
-    id: "1",
-    name: "Laundry Shop 1",
-    rating: "4.7",
-    address: "#2 P. Burgos St., Sto. Rosario SJDM, Bulacan",
-    price: "₱65.00 / kg",
-    image: require("../../assets/images/slide1.png"),
-  },
-  {
-    id: "2",
-    name: "Laundry Shop 2",
-    rating: "4.5",
-    address: "Block 3, Villa Teresa, SJDM, Bulacan",
-    price: "₱60.00 / kg",
-    image: require("../../assets/images/slide2.png"),
-  },
-  {
-    id: "3",
-    name: "Laundry Shop 3",
-    rating: "4.8",
-    address: "Sample Address, Tungko, SJDM, Bulacan",
-    price: "₱70.00 / kg",
-    image: require("../../assets/images/slide3.png"),
-  },
-];
+const DEFAULT_SHOP_IMAGE = require("../../assets/images/slide1.png");
 
-const quickActions = [
-  { id: "1", title: "Order", icon: "basket-outline" as const },
-  { id: "2", title: "Clothes", icon: "shirt-outline" as const },
-  { id: "3", title: "Households", icon: "home-outline" as const },
-  { id: "4", title: "Curtains", icon: "apps-outline" as const },
-];
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
 
 export default function HomeScreen() {
+  const [guestMode, setGuestMode] = useState(false);
+  const [user, setUser] = useState<User | null>(auth.currentUser);
+  const [missingContactMessage, setMissingContactMessage] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [shops, setShops] = useState<LaundryShop[]>([]);
+  const [isLoadingShops, setIsLoadingShops] = useState(true);
+  const isLoggedIn = !!user;
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+      setUser(nextUser);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "laundryShops"),
+      (snapshot) => {
+        const parsed = snapshot.docs
+          .map((item) => parseLaundryShop(item.id, item.data()))
+          .sort((a, b) => a.distanceKm - b.distanceKm);
+        setShops(parsed);
+        setIsLoadingShops(false);
+      },
+      () => {
+        setShops([]);
+        setIsLoadingShops(false);
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  const loadHomeState = useCallback(async () => {
+    const guest = await isGuestMode();
+    setGuestMode(guest);
+
+    if (typeof auth.authStateReady === "function") {
+      try {
+        await auth.authStateReady();
+      } catch {
+        // Ignore and continue with current auth state.
+      }
+    }
+
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      setMissingContactMessage("");
+      return;
+    }
+
+    try {
+      const userSnap = await getDoc(doc(db, "users", currentUser.uid));
+      if (!userSnap.exists()) {
+        setMissingContactMessage("Your address and phone number are not set yet.");
+        return;
+      }
+
+      const data = userSnap.data() as { mobileNumber?: string; address?: string };
+      const mobileNumber = (data.mobileNumber ?? "").trim();
+      const address = (data.address ?? "").trim();
+      const missingAddress = !address;
+      const missingPhoneNumber = !mobileNumber;
+
+      if (missingAddress && missingPhoneNumber) {
+        setMissingContactMessage("Your address and phone number are not set yet.");
+      } else if (missingAddress) {
+        setMissingContactMessage("Your address is not set yet.");
+      } else if (missingPhoneNumber) {
+        setMissingContactMessage("Your phone number is not set yet.");
+      } else {
+        setMissingContactMessage("");
+      }
+    } catch {
+      setMissingContactMessage("");
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadHomeState();
+    }, [loadHomeState])
+  );
+
+  const greeting = useMemo(() => getGreeting(), []);
+  const userName = user?.displayName?.split(" ")[0] || "there";
+  const filteredLaundryShops = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return shops;
+    }
+
+    return shops.filter((shop) =>
+      shop.shopName.toLowerCase().includes(normalizedQuery)
+    );
+  }, [searchQuery, shops]);
+
   return (
     <LinearGradient colors={["#55B7E9", "#2E95D3"]} style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
-        <ScrollView showsVerticalScrollIndicator={false}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+        >
           <View style={styles.headerRow}>
             <View>
               <Text style={styles.brand}>DryBy</Text>
-              <Text style={styles.userName}>Hi, Juan Dela Cruz</Text>
-              <Text style={styles.userSub}>📍 Brgy. Sto. Rosario, SJDM</Text>
+              <Text style={styles.greeting}>
+                {greeting}, {userName}
+              </Text>
+              {!isLoggedIn && !guestMode ? (
+                <Text style={styles.userSub}>Login to access other features</Text>
+              ) : null}
             </View>
 
-            <View style={styles.headerIcons}>
-              <TouchableOpacity style={styles.headerIconBtn}>
-                <Ionicons name="search-outline" size={18} color="#fff" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.headerIconBtn}>
-                <Ionicons name="notifications-outline" size={18} color="#fff" />
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity style={styles.headerIconBtn}>
+              <Ionicons name="notifications-outline" size={20} color="#fff" />
+            </TouchableOpacity>
           </View>
 
-          <View style={styles.actionsRow}>
-            {quickActions.map((item) => (
-              <TouchableOpacity key={item.id} style={styles.actionCard}>
-                <Ionicons name={item.icon} size={24} color="#2E95D3" />
-                <Text style={styles.actionText}>{item.title}</Text>
+          {isLoggedIn && !!missingContactMessage ? (
+            <View style={styles.setupCard}>
+              <Text style={styles.setupText}>{missingContactMessage}</Text>
+              <TouchableOpacity
+                style={styles.setupBtn}
+                onPress={() => router.push("/(tabs)/account")}
+              >
+                <Text style={styles.setupBtnText}>Click here</Text>
               </TouchableOpacity>
-            ))}
-          </View>
+            </View>
+          ) : null}
 
           <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Nearby Laundry Shops</Text>
+            <Text style={styles.sectionTitle}>Laundry Shops Near You</Text>
 
-            <FlatList
-              data={laundryShops}
-              keyExtractor={(item) => item.id}
-              scrollEnabled={false}
-              renderItem={({ item }) => (
-                <View style={styles.shopCard}>
-                  <Image source={item.image} style={styles.shopImage} />
+            {isLoadingShops ? (
+              <View style={styles.loadingShopsWrap}>
+                <ActivityIndicator color="#1B7FB4" />
+                <Text style={styles.loadingShopsText}>Loading nearby laundry shops...</Text>
+              </View>
+            ) : filteredLaundryShops.length ? (
+              filteredLaundryShops.map((item) => (
+                <View key={item.id} style={styles.shopCard}>
+                  <Image
+                    source={item.bannerImageUrl ? { uri: item.bannerImageUrl } : DEFAULT_SHOP_IMAGE}
+                    style={styles.shopImage}
+                  />
                   <View style={styles.shopInfo}>
-                    <Text style={styles.shopName}>{item.name}</Text>
-                    <Text style={styles.shopMeta}>⭐ {item.rating}</Text>
-                    <Text style={styles.shopAddress}>{item.address}</Text>
+                    <Text style={styles.shopName}>{item.shopName}</Text>
+
+                    <View style={styles.ratingRow}>
+                      <Ionicons name="star" size={14} color="#F4C430" />
+                      <Text style={styles.ratingText}>{item.ratingAverage.toFixed(1)}</Text>
+                      <Text style={styles.reviewText}>({item.ratingCount} reviews)</Text>
+                    </View>
+
+                    <Text style={styles.shopAddress}>
+                      from {item.distanceKm.toFixed(1)} km | {item.address || "Address not set"}
+                    </Text>
+
                     <View style={styles.shopFooter}>
-                      <Text style={styles.shopPrice}>{item.price}</Text>
-                      <TouchableOpacity style={styles.viewButton}>
+                      <Text style={styles.shopPrice}>{item.priceLabel}</Text>
+                      <TouchableOpacity
+                        style={styles.viewButton}
+                        onPress={() =>
+                          router.push({
+                            pathname: "/(tabs)/laundry-shop",
+                            params: { shopId: item.id },
+                          })
+                        }
+                      >
                         <Text style={styles.viewButtonText}>View Services</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
                 </View>
-              )}
-            />
+              ))
+            ) : (
+              <Text style={styles.noResultText}>
+                {searchQuery.trim()
+                  ? `No laundry shop found for "${searchQuery.trim()}".`
+                  : "No laundry shops available yet."}
+              </Text>
+            )}
           </View>
         </ScrollView>
 
         <View style={styles.searchBarWrapper}>
           <View style={styles.searchBar}>
             <TextInput
-              placeholder="Search"
-              placeholderTextColor="#8A8A8A"
+              placeholder="Search shops or services"
+              placeholderTextColor="rgba(255,255,255,0.82)"
               style={styles.searchInput}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
             />
-            <Ionicons name="search-outline" size={18} color="#8A8A8A" />
+            <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.9)" />
           </View>
         </View>
       </SafeAreaView>
@@ -127,101 +243,120 @@ const styles = StyleSheet.create({
 
   safeArea: {
     flex: 1,
-    paddingHorizontal: 16,
+    paddingHorizontal: 50,
     paddingTop: 12,
+  },
+
+  scrollContent: {
+    paddingBottom: 108,
   },
 
   headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 18,
+    paddingHorizontal: 28,
+    marginBottom: 14,
   },
 
   brand: {
-    fontSize: 28,
+    fontSize: 42,
     fontWeight: "800",
     color: "#F4C430",
+    marginLeft: 2,
   },
 
-  userName: {
-    fontSize: 18,
+  greeting: {
+    fontSize: 16,
     fontWeight: "700",
-    color: "#fff",
-    marginTop: 4,
+    color: "#FFFFFF",
+    marginTop: 6,
   },
 
   userSub: {
-    fontSize: 12,
+    fontSize: 20,
+    fontWeight: "700",
     color: "#EAF7FF",
-    marginTop: 2,
-  },
-
-  headerIcons: {
-    flexDirection: "row",
-    gap: 10,
+    marginTop: 10,
+    textDecorationLine: "underline",
   },
 
   headerIconBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.35)",
     justifyContent: "center",
     alignItems: "center",
+    marginTop: 30,
+    marginRight: 2,
   },
-
-  actionsRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 16,
-    gap: 8,
-  },
-
-  actionCard: {
-    flex: 1,
-    backgroundColor: "#FFFFFF",
+  setupCard: {
+    marginHorizontal: 28,
+    marginBottom: 10,
     borderRadius: 14,
-    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: "#B9E3FA",
+    backgroundColor: "rgba(233, 247, 255, 0.96)",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    elevation: 4,
+    justifyContent: "space-between",
+    gap: 10,
   },
-
-  actionText: {
-    fontSize: 11,
+  setupText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
+    color: "#1E3A5F",
     fontWeight: "600",
-    color: "#2E95D3",
-    marginTop: 6,
+  },
+  setupBtn: {
+    borderRadius: 14,
+    backgroundColor: "#1BA2EC",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  setupBtnText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "800",
   },
 
   sectionCard: {
-    backgroundColor: "#D8F0FF",
-    borderRadius: 16,
-    padding: 10,
-    marginBottom: 90,
+    backgroundColor: "#EFF1F4",
+    borderRadius: 18,
+    padding: 12,
+    marginHorizontal: 28,
+    marginBottom: 10,
   },
 
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#2E95D3",
-    marginBottom: 10,
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#51AEE1",
+    marginBottom: 12,
   },
 
   shopCard: {
     flexDirection: "row",
     backgroundColor: "#fff",
     borderRadius: 14,
-    padding: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
     marginBottom: 10,
-    elevation: 3,
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
 
   shopImage: {
-    width: 78,
-    height: 78,
+    width: 95,
+    height: 95,
     borderRadius: 10,
     marginRight: 10,
   },
@@ -232,69 +367,105 @@ const styles = StyleSheet.create({
   },
 
   shopName: {
-    fontSize: 14,
+    fontSize: 18,
     fontWeight: "700",
     color: "#111",
   },
 
-  shopMeta: {
+  ratingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+  },
+
+  ratingText: {
+    marginLeft: 4,
+    color: "#262626",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
+  reviewText: {
+    marginLeft: 4,
+    color: "#7A7A7A",
     fontSize: 12,
-    color: "#555",
-    marginTop: 2,
   },
 
   shopAddress: {
-    fontSize: 11,
-    color: "#666",
-    marginTop: 2,
+    fontSize: 12,
+    color: "#333",
+    marginTop: 8,
+    lineHeight: 16,
   },
 
   shopFooter: {
-    marginTop: 6,
+    marginTop: 8,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
 
   shopPrice: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "700",
     color: "#2E95D3",
   },
 
   viewButton: {
-    backgroundColor: "#55B7E9",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 14,
+    backgroundColor: "#1BA2EC",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
   },
 
   viewButtonText: {
     color: "#fff",
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
+  },
+  loadingShopsWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 20,
+  },
+  loadingShopsText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: "#475569",
+    fontWeight: "600",
+  },
+  noResultText: {
+    fontSize: 13,
+    color: "#475569",
+    textAlign: "center",
+    paddingVertical: 18,
+    fontWeight: "600",
   },
 
   searchBarWrapper: {
     position: "absolute",
     bottom: 78,
-    left: 16,
-    right: 16,
+    left: 54,
+    right: 54,
   },
 
   searchBar: {
-    backgroundColor: "#fff",
-    borderRadius: 18,
+    backgroundColor: "#5ABAE8",
+    borderRadius: 20,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 14,
-    height: 42,
-    elevation: 6,
+    height: 46,
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
   },
 
   searchInput: {
     flex: 1,
-    fontSize: 14,
-    color: "#111",
+    fontSize: 15,
+    color: "#fff",
   },
 });

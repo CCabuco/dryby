@@ -1,7 +1,11 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { router } from "expo-router";
-import { sendPasswordResetEmail } from "firebase/auth";
+import { router, useLocalSearchParams } from "expo-router";
+import {
+  fetchSignInMethodsForEmail,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+} from "firebase/auth";
 import React, { useEffect, useState } from "react";
 import {
   Image,
@@ -17,11 +21,29 @@ import { auth } from "../lib/firebase";
 import { normalizeEmail, sanitizeInput, validateEmail } from "../lib/security";
 
 export default function ForgotPasswordScreen() {
+  const params = useLocalSearchParams<{ from?: string | string[] }>();
+  const fromParam = Array.isArray(params.from) ? params.from[0] : params.from;
+  const cameFromAccount = fromParam === "account";
   const [email, setEmail] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [hasActiveSession, setHasActiveSession] = useState(!!auth.currentUser);
+  const getResetRedirectUrl = () => {
+    const hostedUrl = "https://dryby-fi.web.app/auth-action";
+
+    if (Platform.OS !== "web" || typeof window === "undefined") {
+      return hostedUrl;
+    }
+
+    const host = window.location.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1") {
+      return hostedUrl;
+    }
+
+    return `${window.location.origin}/auth-action`;
+  };
 
   useEffect(() => {
     if (!cooldownSeconds) {
@@ -34,6 +56,14 @@ export default function ForgotPasswordScreen() {
 
     return () => clearInterval(timer);
   }, [cooldownSeconds]);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+      setHasActiveSession(!!nextUser);
+    });
+
+    return unsubscribe;
+  }, []);
 
   const handleSendResetLink = async () => {
     if (cooldownSeconds > 0) {
@@ -59,10 +89,19 @@ export default function ForgotPasswordScreen() {
     setSuccessMessage("");
 
     try {
-      const isWeb = Platform.OS === "web" && typeof window !== "undefined";
-      const origin = isWeb ? window.location.origin : "https://dryby-fi.web.app";
+      const methods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
+      if (!methods.length) {
+        setErrorMessage("Account does not exist.");
+        return;
+      }
+
+      if (!methods.includes("password")) {
+        setErrorMessage("This account uses Google/Facebook sign-in and has no password to reset.");
+        return;
+      }
+
       await sendPasswordResetEmail(auth, normalizedEmail, {
-        url: `${origin}/login`,
+        url: getResetRedirectUrl(),
         handleCodeInApp: false,
       });
       setCooldownSeconds(60);
@@ -72,7 +111,7 @@ export default function ForgotPasswordScreen() {
     } catch (error: any) {
       let message = "Unable to send reset link right now. Please try again.";
       if (error?.code === "auth/user-not-found") {
-        message = "No account found for this email address.";
+        message = "Account does not exist.";
       } else if (error?.code === "auth/invalid-email") {
         message = "Please enter a valid email address.";
       } else if (error?.code === "auth/too-many-requests") {
@@ -83,6 +122,9 @@ export default function ForgotPasswordScreen() {
       setIsSending(false);
     }
   };
+
+  const returnToRoute = cameFromAccount || hasActiveSession ? "/(tabs)/account" : "/login";
+  const returnLabel = cameFromAccount || hasActiveSession ? "Back to Account" : "Back to Login";
 
   return (
     <LinearGradient colors={["#55B7E9", "#2E95D3"]} style={styles.container}>
@@ -105,7 +147,13 @@ export default function ForgotPasswordScreen() {
           </View>
 
           <Text style={styles.title}>Would you like to reset your password?</Text>
+          <View style={styles.bulletinBox}>
+            <Text style={styles.bulletText}>We will send a password reset link to your email.</Text>
+            <Text style={styles.bulletText}>The link is for one-time use only for your security.</Text>
+            <Text style={styles.bulletText}>If the link expires, you can request a new one from this page.</Text>
+          </View>
 
+          <Text style={styles.label}>Email Address</Text>
           <View style={styles.inputContainer}>
             <MaterialCommunityIcons name="email-outline" size={20} color="#333" />
             <TextInput
@@ -159,8 +207,8 @@ export default function ForgotPasswordScreen() {
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.loginBtn} onPress={() => router.push("./login")}>
-            <Text style={styles.loginBtnText}>Back to Login</Text>
+          <TouchableOpacity style={styles.loginBtn} onPress={() => router.replace(returnToRoute)}>
+            <Text style={styles.loginBtnText}>{returnLabel}</Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -232,6 +280,30 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: "#111",
     marginBottom: 16,
+  },
+
+  bulletinBox: {
+    width: "100%",
+    borderRadius: 10,
+    backgroundColor: "#EAF4FF",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 12,
+  },
+
+  bulletText: {
+    fontSize: 12,
+    color: "#234262",
+    lineHeight: 17,
+    marginBottom: 2,
+  },
+
+  label: {
+    width: "100%",
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#111",
+    marginBottom: 8,
   },
 
   inputContainer: {

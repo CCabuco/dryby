@@ -1,7 +1,43 @@
 import { Ionicons } from "@expo/vector-icons";
+import { onAuthStateChanged } from "firebase/auth";
 import { Tabs } from "expo-router";
+import React, { useEffect, useState } from "react";
+import { isGuestMode } from "../../lib/app-state";
+import { auth } from "../../lib/firebase";
 
 export default function TabLayout() {
+  const [hideRestrictedTabs, setHideRestrictedTabs] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncAccessState = async () => {
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        if (isMounted) {
+          setHideRestrictedTabs(false);
+        }
+        return;
+      }
+
+      const guest = await isGuestMode();
+      if (isMounted) {
+        setHideRestrictedTabs(guest);
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, () => {
+      void syncAccessState();
+    });
+
+    void syncAccessState();
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
   return (
     <Tabs
       screenOptions={{
@@ -54,6 +90,7 @@ export default function TabLayout() {
         name="transactions"
         options={{
           title: "Transactions",
+          href: hideRestrictedTabs ? null : undefined,
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
               name={focused ? "receipt" : "receipt-outline"}
@@ -68,6 +105,7 @@ export default function TabLayout() {
         name="announcements"
         options={{
           title: "Announcements",
+          href: hideRestrictedTabs ? null : undefined,
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
               name={focused ? "megaphone" : "megaphone-outline"}
@@ -89,6 +127,34 @@ export default function TabLayout() {
               color={color}
             />
           ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="laundry-shop"
+        options={{
+          href: null,
+        }}
+      />
+
+      <Tabs.Screen
+        name="place-service"
+        options={{
+          href: null,
+        }}
+      />
+
+      <Tabs.Screen
+        name="book-service"
+        options={{
+          href: null,
+        }}
+      />
+
+      <Tabs.Screen
+        name="shop-management"
+        options={{
+          href: null,
         }}
       />
     </Tabs>

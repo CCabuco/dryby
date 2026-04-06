@@ -16,6 +16,8 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { auth, db } from "../lib/firebase";
+import { setGuestMode } from "../lib/app-state";
+import { mergeGuestCartToUser } from "../lib/cart-state";
 import {
   containsBlockedContent,
   getPasswordIssue,
@@ -87,7 +89,7 @@ export default function SignUpScreen() {
       case 1:
         return {
           title: "What's your name?",
-          subtitle: "Use letters only, 2 to 50 characters.",
+          subtitle: "Use letters and spaces, 2 to 50 characters.",
         };
       case 2:
         return {
@@ -122,7 +124,7 @@ export default function SignUpScreen() {
         return "Please remove unsafe or offensive text from your name.";
       }
       if (!validateName(firstName) || !validateName(lastName)) {
-        return "Names must be letters only, 2 to 50 characters.";
+        return "Names must use letters/spaces only, 2 to 50 characters.";
       }
     }
 
@@ -178,6 +180,7 @@ export default function SignUpScreen() {
   const createAccount = async () => {
     const normalizedEmail = normalizeEmail(form.email);
     const normalizedMobile = normalizePHPhone(form.mobileNumber);
+    const normalizedFullName = `${form.firstName.trim()} ${form.lastName.trim()}`.trim();
     setIsSubmitting(true);
     setSubmitError("");
 
@@ -194,21 +197,25 @@ export default function SignUpScreen() {
         uid: credential.user.uid,
         firstName: form.firstName.trim(),
         lastName: form.lastName.trim(),
-        fullName: `${form.firstName.trim()} ${form.lastName.trim()}`.trim(),
+        fullName: normalizedFullName,
         email: normalizedEmail,
         mobileNumber: normalizedMobile,
         authProvider: "password",
         emailVerified: credential.user.emailVerified,
+        nameHistory: [{ name: normalizedFullName, changedAt: Date.now() }],
+        usernameLastChangedAt: null,
         createdAt: serverTimestamp(),
         lastLoginAt: serverTimestamp(),
       });
 
+      await setGuestMode(false);
+      await mergeGuestCartToUser(credential.user.uid);
       router.replace("/(tabs)");
     } catch (error: any) {
       let message = "Unable to create account right now. Please try again.";
 
       if (error?.code === "auth/email-already-in-use") {
-        message = "This email is already registered. Please log in instead.";
+        message = "Account already exists.";
       } else if (error?.code === "auth/invalid-email") {
         message = "Please enter a valid email address.";
       } else if (error?.code === "auth/weak-password") {

@@ -1,9 +1,11 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
+import { signOut } from "firebase/auth";
 import React, { useRef, useState } from "react";
 import {
   FlatList,
   Image,
+  Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
   StyleSheet,
@@ -12,6 +14,8 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { setGuestMode, setOnboardingSeen } from "../lib/app-state";
+import { auth } from "../lib/firebase";
 
 const onboardingData = [
   {
@@ -40,6 +44,7 @@ const onboardingData = [
 export default function OnboardingScreen() {
   const { width, height } = useWindowDimensions();
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [showGetStartedPrompt, setShowGetStartedPrompt] = useState(false);
   const flatListRef = useRef<FlatList<any>>(null);
   const cardHeight = Math.min(620, Math.max(520, height * 0.76));
 
@@ -55,12 +60,12 @@ export default function OnboardingScreen() {
         animated: true,
       });
     } else {
-      router.replace("./login");
+      setShowGetStartedPrompt(true);
     }
   };
 
   const handleSkip = () => {
-    router.replace("./login");
+    setShowGetStartedPrompt(true);
   };
 
   const handleDotPress = (index: number) => {
@@ -68,6 +73,15 @@ export default function OnboardingScreen() {
       index,
       animated: true,
     });
+  };
+
+  const continueAsGuest = async () => {
+    await setOnboardingSeen(true);
+    if (auth.currentUser) {
+      await signOut(auth);
+    }
+    await setGuestMode(true);
+    router.replace("/(tabs)");
   };
 
   return (
@@ -158,6 +172,51 @@ export default function OnboardingScreen() {
           </View>
         )}
       />
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={showGetStartedPrompt}
+        onRequestClose={() => setShowGetStartedPrompt(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Do you already have an account?</Text>
+
+            <TouchableOpacity
+              style={styles.modalPrimaryButton}
+              onPress={async () => {
+                setShowGetStartedPrompt(false);
+                await setOnboardingSeen(true);
+                router.replace("./login");
+              }}
+            >
+              <Text style={styles.modalPrimaryButtonText}>Yes, Log in</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modalSecondaryButton}
+              onPress={async () => {
+                setShowGetStartedPrompt(false);
+                await setOnboardingSeen(true);
+                router.replace("./signup");
+              }}
+            >
+              <Text style={styles.modalSecondaryButtonText}>No, Create account</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modalTextButton}
+              onPress={async () => {
+                setShowGetStartedPrompt(false);
+                await continueAsGuest();
+              }}
+            >
+              <Text style={styles.modalTextButtonText}>Continue to homepage</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </LinearGradient>
   );
 }
@@ -290,5 +349,74 @@ const styles = StyleSheet.create({
 
   skipTextHidden: {
     opacity: 0,
+  },
+
+  modalBackdrop: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+
+  modalCard: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 22,
+  },
+
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1F2937",
+    textAlign: "center",
+    marginBottom: 16,
+  },
+
+  modalPrimaryButton: {
+    backgroundColor: "#F4C430",
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginBottom: 10,
+  },
+
+  modalPrimaryButtonText: {
+    color: "#111",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+
+  modalSecondaryButton: {
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginBottom: 10,
+  },
+
+  modalSecondaryButtonText: {
+    color: "#1F2937",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+
+  modalTextButton: {
+    alignItems: "center",
+    paddingTop: 6,
+  },
+
+  modalTextButtonText: {
+    color: "#2563EB",
+    fontSize: 14,
+    fontWeight: "600",
   },
 });
