@@ -5,12 +5,59 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function verifiedUser() {
+      return signedIn() && request.auth.token.email_verified == true;
+    }
+
+    function reviewKeysValid(data) {
+      return data.keys().hasAll([
+        "shopId",
+        "userUid",
+        "userName",
+        "rating",
+        "comment",
+        "createdAt",
+        "updatedAt",
+      ]) &&
+      data.keys().hasOnly([
+        "shopId",
+        "userUid",
+        "userName",
+        "rating",
+        "comment",
+        "createdAt",
+        "updatedAt",
+      ]);
+    }
+
+    function reviewPayloadValid(data, shopId) {
+      return reviewKeysValid(data)
+        && data.shopId == shopId
+        && data.userUid == request.auth.uid
+        && data.userName is string
+        && data.userName.size() >= 2
+        && data.userName.size() <= 80
+        && data.comment is string
+        && data.comment.size() >= 5
+        && data.comment.size() <= 500
+        && (data.rating is int || data.rating is float)
+        && data.rating >= 1
+        && data.rating <= 5;
+    }
+
     function shopOwnerUid(shopId) {
       return get(/databases/$(database)/documents/laundryShops/$(shopId)).data.ownerUid;
     }
 
     function isShopOwner(shopId) {
       return signedIn() && shopOwnerUid(shopId) == request.auth.uid;
+    }
+
+    function canReviewShop(shopId) {
+      return signedIn()
+        && exists(
+          /databases/$(database)/documents/laundryShops/$(shopId)/reviewEligibleUsers/$(request.auth.uid)
+        );
     }
 
     // User profile
@@ -24,6 +71,37 @@ service cloud.firestore {
       allow read: if true;
       allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
       allow update, delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+
+      // Review eligibility grants generated when an order is completed.
+      match /reviewEligibleUsers/{uid} {
+        allow read: if signedIn() && (uid == request.auth.uid || isShopOwner(shopId));
+        allow create, update: if isShopOwner(shopId)
+          && request.resource.data.shopId == shopId
+          && request.resource.data.userUid == uid;
+        allow delete: if isShopOwner(shopId);
+      }
+
+      // Real user reviews only (1 review per user per shop)
+      match /reviews/{reviewId} {
+        allow read: if true;
+
+        allow create: if verifiedUser()
+          && canReviewShop(shopId)
+          && reviewId == request.auth.uid
+          && reviewPayloadValid(request.resource.data, shopId)
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+
+        allow update: if verifiedUser()
+          && canReviewShop(shopId)
+          && reviewId == request.auth.uid
+          && resource.data.userUid == request.auth.uid
+          && reviewPayloadValid(request.resource.data, shopId)
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time;
+
+        allow delete: if false;
+      }
 
       // Shop services managed by owner, visible to all users
       match /services/{serviceId} {
@@ -43,7 +121,7 @@ service cloud.firestore {
         allow update: if signedIn()
           && (isShopOwner(shopId) || resource.data.customerUid == request.auth.uid);
 
-        allow delete: if false;
+        allow delete: if signedIn() && isShopOwner(shopId);
       }
     }
 

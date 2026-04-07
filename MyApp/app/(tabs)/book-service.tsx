@@ -30,7 +30,6 @@ import { setGuestMode } from "../../lib/app-state";
 import { addItemToCart } from "../../lib/cart-state";
 import { auth, db } from "../../lib/firebase";
 import {
-  ACTION_OPTIONS,
   formatHourLabel,
   getCutoffHour,
   getServiceSupportMap,
@@ -46,7 +45,6 @@ type PickupMode = "now" | "slot";
 type DropdownType = "province" | "city";
 type CalendarField = "bookingDate" | "deliveryDate";
 type LoadCategory = "normal" | "heavy";
-type LaundryOperation = "wash" | "dry" | "fold";
 type BookingStep = 1 | 2 | 3;
 type AddressMode = "saved" | "new";
 type TimeWindow = {
@@ -266,12 +264,6 @@ const LOAD_CATEGORY_COPY: Record<
   },
 };
 
-const OPERATION_LABELS: Record<LaundryOperation, string> = {
-  wash: "Wash",
-  dry: "Dry",
-  fold: "Fold",
-};
-
 function startOfDay(value: Date): Date {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate());
 }
@@ -361,11 +353,7 @@ export default function BookServiceScreen() {
   const [savedPhoneNumber, setSavedPhoneNumber] = useState("");
   const [isLoadingSavedAddress, setIsLoadingSavedAddress] = useState(false);
   const [loadCategory, setLoadCategory] = useState<LoadCategory | "">("");
-  const [operations, setOperations] = useState<Record<LaundryOperation, boolean>>({
-    wash: true,
-    dry: true,
-    fold: false,
-  });
+  const [selectedLoadServiceIds, setSelectedLoadServiceIds] = useState<string[]>([]);
 
   const [bookingDate, setBookingDate] = useState(formatYmd(today));
   const [selectedStandardWindow, setSelectedStandardWindow] = useState("");
@@ -399,7 +387,7 @@ export default function BookServiceScreen() {
     if (bookingStep === 1) {
       return {
         title: "Choose Load Category",
-        subtitle: "Choose load type and what to do: wash, dry, fold, or combo.",
+        subtitle: "Choose the load type, then pick the services you want.",
       };
     }
 
@@ -415,10 +403,6 @@ export default function BookServiceScreen() {
       subtitle: "Last step: complete address, date, and pickup window.",
     };
   }, [bookingStep, serviceTitle]);
-
-  const selectedOperationLabels = (
-    Object.keys(operations) as LaundryOperation[]
-  ).filter((key) => operations[key]).map((key) => OPERATION_LABELS[key]);
 
   const activeLoadCopy = useMemo(() => {
     if (selectedShop) {
@@ -444,12 +428,17 @@ export default function BookServiceScreen() {
     () => getServiceSupportMap(shopServices),
     [shopServices]
   );
-  const allowedActionsForSelectedLoad = useMemo<LaundryOperation[]>(() => {
-    if (!selectedShop || !loadCategory) {
-      return [...ACTION_OPTIONS];
-    }
-    return selectedShop.loadConfigs[loadCategory].allowedActions as LaundryOperation[];
-  }, [loadCategory, selectedShop]);
+  const selectableServices = useMemo(
+    () => shopServices.filter((service) => service.enabled),
+    [shopServices]
+  );
+  const selectedLoadServiceNames = useMemo(
+    () =>
+      selectableServices
+        .filter((service) => selectedLoadServiceIds.includes(service.id))
+        .map((service) => service.serviceName),
+    [selectableServices, selectedLoadServiceIds]
+  );
   const openingHour = selectedShop
     ? Number(selectedShop.openingTime.split(":")[0] ?? ORDER_START_HOUR)
     : ORDER_START_HOUR;
@@ -516,9 +505,14 @@ export default function BookServiceScreen() {
       try {
         let resolvedShopId = parsedShopId ?? "";
         if (!resolvedShopId) {
-          const fallbackSnapshot = await getDocs(query(collection(db, "laundryShops"), limit(1)));
+          const fallbackSnapshot = await getDocs(query(collection(db, "laundryShops"), limit(20)));
           if (!fallbackSnapshot.empty) {
-            resolvedShopId = fallbackSnapshot.docs[0].id;
+            const firstActiveShop = fallbackSnapshot.docs
+              .map((item) => ({ id: item.id, shop: parseLaundryShop(item.id, item.data()) }))
+              .find((item) => item.shop.isActive);
+            if (firstActiveShop) {
+              resolvedShopId = firstActiveShop.id;
+            }
           }
         }
 
@@ -539,13 +533,22 @@ export default function BookServiceScreen() {
           return;
         }
 
+        const parsedShop = parseLaundryShop(shopSnapshot.id, shopSnapshot.data());
+        if (!parsedShop.isActive) {
+          if (isMounted) {
+            setSelectedShop(null);
+            setShopServices([]);
+          }
+          return;
+        }
+
         const servicesSnapshot = await getDocs(collection(db, "laundryShops", resolvedShopId, "services"));
 
         if (!isMounted) {
           return;
         }
 
-        setSelectedShop(parseLaundryShop(shopSnapshot.id, shopSnapshot.data()));
+        setSelectedShop(parsedShop);
         setShopServices(
           servicesSnapshot.docs.map((item) => normalizeLaundryService(item.id, item.data()))
         );
@@ -654,17 +657,19 @@ export default function BookServiceScreen() {
     if (!loadCategory || !selectedShop) {
       return;
     }
-    const allowed = selectedShop.loadConfigs[loadCategory].allowedActions;
-    setOperations((previous) => {
-      const next = { ...previous };
-      (Object.keys(next) as LaundryOperation[]).forEach((key) => {
-        if (!allowed.includes(key)) {
-          next[key] = false;
-        }
-      });
-      return next;
+    setSelectedLoadServiceIds((previous) => {
+      const enabledIds = selectableServices.map((service) => service.id);
+      return previous.filter((id) => enabledIds.includes(id));
     });
-  }, [loadCategory, selectedShop]);
+  }, [loadCategory, selectedShop, selectableServices]);
+
+  const toggleLoadService = (serviceId: string) => {
+    setSelectedLoadServiceIds((previous) =>
+      previous.includes(serviceId)
+        ? previous.filter((id) => id !== serviceId)
+        : [...previous, serviceId]
+    );
+  };
 
   const getCalendarLimits = (): { min: Date; max: Date } => {
     if (calendarField === "bookingDate") {
@@ -801,13 +806,6 @@ export default function BookServiceScreen() {
     setDropdownType(null);
   };
 
-  const toggleOperation = (operation: LaundryOperation) => {
-    setOperations((previous) => ({
-      ...previous,
-      [operation]: !previous[operation],
-    }));
-  };
-
   const goNextStep = () => {
     setErrorMessage("");
     setSuccessMessage("");
@@ -827,9 +825,8 @@ export default function BookServiceScreen() {
         setErrorMessage("Please choose if this is a normal load or heavy load.");
         return;
       }
-
-      if (!selectedOperationLabels.length) {
-        setErrorMessage("Please select at least one service toggle: wash, dry, or fold.");
+      if (!selectedLoadServiceIds.length) {
+        setErrorMessage("Please choose at least one service for this load.");
         return;
       }
     }
@@ -878,9 +875,8 @@ export default function BookServiceScreen() {
       setErrorMessage("Please choose if this is a normal load or heavy load.");
       return;
     }
-
-    if (!selectedOperationLabels.length) {
-      setErrorMessage("Please select at least one service toggle: wash, dry, or fold.");
+    if (!selectedLoadServiceIds.length) {
+      setErrorMessage("Please choose at least one service for this load.");
       return;
     }
 
@@ -971,7 +967,7 @@ export default function BookServiceScreen() {
         return;
       }
 
-      readyMessage = `Standard booking is ready: ${activeLoadCopy[loadCategory].title} | ${selectedOperationLabels.join(" + ")}.`;
+      readyMessage = `Standard booking is ready: ${activeLoadCopy[loadCategory].title} | ${selectedLoadServiceNames.join(" + ")}.`;
     } else {
       if (
         pickupMode === "slot" &&
@@ -996,7 +992,7 @@ export default function BookServiceScreen() {
 
       const deliveryDiff = daysBetween(parsedBookingDate, parsedDeliveryDate);
       const note = deliveryDiff > 1 ? " Extended delivery may incur additional fees." : "";
-      readyMessage = `Express booking is ready: ${activeLoadCopy[loadCategory].title} | ${selectedOperationLabels.join(" + ")}.${note}`;
+      readyMessage = `Express booking is ready: ${activeLoadCopy[loadCategory].title} | ${selectedLoadServiceNames.join(" + ")}.${note}`;
     }
 
     let savedNotice = "";
@@ -1053,7 +1049,7 @@ export default function BookServiceScreen() {
         customerNameCurrent: fullName,
         serviceType: resolvedServiceType === "express" ? "Express" : "Standard",
         loadCategory: activeLoadCopy[loadCategory].title,
-        selectedActions: selectedOperationLabels,
+        selectedServices: selectedLoadServiceNames,
         pickupDate: bookingDate,
         pickupWindow: pickupLabel,
         deliveryDate: resolvedServiceType === "express" ? deliveryDate : "",
@@ -1091,11 +1087,6 @@ export default function BookServiceScreen() {
       return;
     }
 
-    if (!selectedOperationLabels.length) {
-      setErrorMessage("Please select at least one service action.");
-      return;
-    }
-
     if (!selectedServiceType) {
       setErrorMessage("Please choose service type (standard or express).");
       return;
@@ -1114,7 +1105,7 @@ export default function BookServiceScreen() {
       {
         shopId: selectedShop.id,
         shopName: selectedShop.shopName,
-        title: `${activeLoadCopy[loadCategory].title} - ${selectedOperationLabels.join(" + ")}`,
+        title: `${activeLoadCopy[loadCategory].title} - ${selectedLoadServiceNames.join(" + ")}`,
         priceLabel: `${serviceLabel} - ${selectedShop.priceLabel}`,
         address: selectedShop.address || "Address not set",
         distanceKm: selectedShop.distanceKm,
@@ -1131,7 +1122,7 @@ export default function BookServiceScreen() {
     !!selectedShop &&
     !!loadCategory &&
     !!selectedServiceType &&
-    selectedOperationLabels.length > 0;
+    selectedLoadServiceIds.length > 0;
   const bottomActionOffset = Math.max(
     tabBarHeight - 36,
     Platform.OS === "ios" ? 22 : 14
@@ -1261,38 +1252,40 @@ export default function BookServiceScreen() {
                   </View>
                 </View>
 
-                <View style={styles.loadActionsSection}>
-                  <Text style={[styles.sectionTitle, styles.loadSectionTitle]}>Load Actions</Text>
+                <View style={styles.loadServicesSection}>
+                  <Text style={[styles.sectionTitle, styles.loadSectionTitle]}>Services</Text>
                   <Text style={styles.helperText}>
-                    Select what you want done for this load.
+                    Select the services you want for this load.
                   </Text>
 
-                  <View style={styles.toggleRow}>
-                    {allowedActionsForSelectedLoad.map((operationKey) => {
-                      const active = operations[operationKey];
-                      return (
-                        <TouchableOpacity
-                          key={operationKey}
-                          style={[styles.toggleButton, active && styles.toggleButtonActive]}
-                          onPress={() => toggleOperation(operationKey)}
-                        >
-                          <Ionicons
-                            name={active ? "checkbox" : "square-outline"}
-                            size={18}
-                            color={active ? "#0B6394" : "#64748B"}
-                          />
-                          <Text style={[styles.toggleText, active && styles.toggleTextActive]}>
-                            {OPERATION_LABELS[operationKey]}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                  <Text style={styles.helperText}>
-                    Selected combo:{" "}
-                    {selectedOperationLabels.length ? selectedOperationLabels.join(" + ") : "None"}
-                  </Text>
+                  {selectableServices.length ? (
+                    <View style={styles.chipGroup}>
+                      {selectableServices.map((service) => {
+                        const selected = selectedLoadServiceIds.includes(service.id);
+                        return (
+                          <TouchableOpacity
+                            key={service.id}
+                            style={[styles.chip, selected && styles.chipActive]}
+                            onPress={() => toggleLoadService(service.id)}
+                          >
+                            <Text style={[styles.chipText, selected && styles.chipTextActive]}>
+                              {service.serviceName}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  ) : (
+                    <Text style={styles.helperText}>No enabled services configured yet.</Text>
+                  )}
+
+                  {selectedLoadServiceNames.length ? (
+                    <Text style={styles.helperText}>
+                      Selected services: {selectedLoadServiceNames.join(" + ")}
+                    </Text>
+                  ) : null}
                 </View>
+
               </>
             )}
 
@@ -1375,10 +1368,7 @@ export default function BookServiceScreen() {
                     Load: {loadCategory ? activeLoadCopy[loadCategory].title : "Not selected"}
                   </Text>
                   <Text style={styles.selectionSummaryText}>
-                    Actions:{" "}
-                    {selectedOperationLabels.length
-                      ? selectedOperationLabels.join(" + ")
-                      : "Not selected"}
+                    Services: {selectedLoadServiceNames.length ? selectedLoadServiceNames.join(" + ") : "Not selected"}
                   </Text>
                   <Text style={styles.selectionSummaryText}>
                     Service:{" "}
@@ -1895,7 +1885,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 10,
   },
-  loadActionsSection: {
+  loadServicesSection: {
     marginTop: 12,
     borderRadius: 14,
     borderWidth: 1,
@@ -2017,35 +2007,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#334155",
     fontWeight: "600",
-  },
-  toggleRow: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 8,
-  },
-  toggleButton: {
-    flex: 1,
-    minHeight: 42,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
-    backgroundColor: "#fff",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  toggleButtonActive: {
-    borderColor: "#1BA2EC",
-    backgroundColor: "#EAF6FF",
-  },
-  toggleText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#334155",
-  },
-  toggleTextActive: {
-    color: "#0B6394",
   },
   label: {
     marginTop: 10,

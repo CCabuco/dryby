@@ -11,6 +11,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   where,
 } from "firebase/firestore";
@@ -53,11 +54,14 @@ import {
 
 type ManagedOrder = {
   id: string;
+  customerUid: string;
+  customerName: string;
   customerNameDisplay: string;
   serviceType: string;
   pickupDate: string;
   totalAmount: string;
   status: string;
+  isDemo: boolean;
 };
 
 type ServiceActionState = Record<LaundryAction, boolean>;
@@ -98,10 +102,10 @@ function getNextStatus(current: string): string {
 }
 
 function statusLabel(shop: LaundryShop): string {
-  if (!shop.isOpen) {
-    return "Closed (manual override)";
+  if (!shop.isActive) {
+    return "Inactive (hidden from customers)";
   }
-  return isShopAutoOpen(shop) ? "Open now" : "Closed by schedule";
+  return isShopAutoOpen(shop) ? "Active · Open now" : "Active · Closed by schedule";
 }
 
 function defaultWindowLabel(startHour: number, endHour: number): string {
@@ -210,6 +214,7 @@ export default function ShopManagementScreen() {
   const [newWindowStartHour, setNewWindowStartHour] = useState("9");
   const [newWindowEndHour, setNewWindowEndHour] = useState("12");
   const [newWindowService, setNewWindowService] = useState<ServiceSpeed>("standard");
+  const [pickupWindowEditorId, setPickupWindowEditorId] = useState<string | null>(null);
   const [isPickupWindowDialogOpen, setIsPickupWindowDialogOpen] = useState(false);
   const [isShopProfileOpen, setIsShopProfileOpen] = useState(false);
   const [activeProfileEditor, setActiveProfileEditor] = useState<ProfileEditorSection | null>(null);
@@ -219,10 +224,44 @@ export default function ShopManagementScreen() {
   const [isServiceCatalogOpen, setIsServiceCatalogOpen] = useState(false);
   const [isServiceDialogOpen, setIsServiceDialogOpen] = useState(false);
   const [isBookingsOpen, setIsBookingsOpen] = useState(false);
+  const [isBookingDialogOpen, setIsBookingDialogOpen] = useState(false);
+  const [bookingEditorId, setBookingEditorId] = useState<string | null>(null);
+  const [bookingCustomerName, setBookingCustomerName] = useState("");
+  const [bookingServiceType, setBookingServiceType] = useState("Standard Service");
+  const [bookingPickupDate, setBookingPickupDate] = useState("");
+  const [bookingTotalAmount, setBookingTotalAmount] = useState("");
+  const [bookingStatus, setBookingStatus] = useState("new");
 
   const clearMessages = () => {
     setErrorText("");
     setSuccessText("");
+  };
+
+  const updateActiveStatus = async (value: boolean) => {
+    if (!shopId) {
+      return;
+    }
+    clearMessages();
+    updateShop((previous) => ({
+      ...previous,
+      isActive: value,
+      isOpen: value,
+    }));
+    try {
+      await updateDoc(doc(db, "laundryShops", shopId), {
+        isActive: value,
+        isOpen: value,
+        updatedAt: serverTimestamp(),
+      });
+      setSuccessText(value ? "Shop is now active." : "Shop set to inactive.");
+    } catch {
+      updateShop((previous) => ({
+        ...previous,
+        isActive: !value,
+        isOpen: !value,
+      }));
+      setErrorText("Unable to update shop status.");
+    }
   };
 
   const updateShop = (updater: (previous: LaundryShop) => LaundryShop) => {
@@ -289,6 +328,7 @@ export default function ShopManagementScreen() {
 
   const openAddPickupWindowDialog = () => {
     clearMessages();
+    setPickupWindowEditorId(null);
     setNewWindowStartHour("9");
     setNewWindowEndHour("12");
     setNewWindowService("standard");
@@ -296,7 +336,26 @@ export default function ShopManagementScreen() {
   };
 
   const closePickupWindowDialog = () => {
+    setPickupWindowEditorId(null);
     setIsPickupWindowDialogOpen(false);
+  };
+
+  const startEditingPickupWindow = (windowId: string) => {
+    if (!shopDraft) {
+      return;
+    }
+
+    const target = shopDraft.pickupWindows.find((window) => window.id === windowId);
+    if (!target) {
+      return;
+    }
+
+    clearMessages();
+    setPickupWindowEditorId(target.id);
+    setNewWindowStartHour(String(target.startHour));
+    setNewWindowEndHour(String(target.endHour));
+    setNewWindowService(target.forService);
+    setIsPickupWindowDialogOpen(true);
   };
 
   useEffect(() => {
@@ -362,6 +421,8 @@ export default function ShopManagementScreen() {
                 const previousName = String(data.customerNamePrevious ?? "");
                 return {
                   id: item.id,
+                  customerUid: String(data.customerUid ?? ""),
+                  customerName: currentName,
                   customerNameDisplay:
                     previousName && previousName !== currentName
                       ? `${previousName} -> ${currentName}`
@@ -370,6 +431,10 @@ export default function ShopManagementScreen() {
                   pickupDate: String(data.pickupDate ?? "No date"),
                   totalAmount: String(data.totalAmount ?? "P0"),
                   status: String(data.status ?? "new"),
+                  isDemo:
+                    data.isDemo === true ||
+                    String(data.customerNameCurrent ?? data.customerName ?? "").trim() ===
+                      "Sample Customer",
                 };
               })
             );
@@ -467,7 +532,7 @@ export default function ShopManagementScreen() {
     setSuccessText("Pickup window removed from draft.");
   };
 
-  const addWindow = () => {
+  const saveWindow = () => {
     if (!shopDraft) {
       return;
     }
@@ -487,7 +552,7 @@ export default function ShopManagementScreen() {
     }
 
     const nextWindow = {
-      id: `win-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: pickupWindowEditorId ?? `win-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       label: defaultWindowLabel(startHour, endHour),
       startHour,
       endHour,
@@ -495,13 +560,28 @@ export default function ShopManagementScreen() {
       enabled: true,
     };
 
-    updateShop((previous) => ({
-      ...previous,
-      pickupWindows: [...previous.pickupWindows, nextWindow],
-    }));
+    updateShop((previous) => {
+      const pickupWindows = pickupWindowEditorId
+        ? previous.pickupWindows.map((window) =>
+            window.id === pickupWindowEditorId
+              ? { ...nextWindow, enabled: window.enabled }
+              : window
+          )
+        : [...previous.pickupWindows, nextWindow];
 
-    setSuccessText("Window added. Save shop details to apply it.");
+      return {
+        ...previous,
+        pickupWindows,
+      };
+    });
+
+    setSuccessText(
+      pickupWindowEditorId
+        ? "Pickup window updated. Save shop details to apply it."
+        : "Window added. Save shop details to apply it."
+    );
     setIsPickupWindowDialogOpen(false);
+    setPickupWindowEditorId(null);
   };
 
   const saveShopDetails = async (): Promise<boolean> => {
@@ -551,7 +631,8 @@ export default function ShopManagementScreen() {
       closingTime: parseTimeInput(shopDraft.closingTime, "19:00"),
       standardCutoffTime: parseTimeInput(shopDraft.standardCutoffTime, "19:00"),
       operatingDays: shopDraft.operatingDays,
-      isOpen: shopDraft.isOpen,
+      isActive: shopDraft.isActive,
+      isOpen: shopDraft.isActive,
       deliveryAvailable: shopDraft.deliveryAvailable,
       pickupAvailable: shopDraft.pickupAvailable,
       maxOrdersPerDay: Math.max(1, Math.round(shopDraft.maxOrdersPerDay || 1)),
@@ -748,10 +829,25 @@ export default function ShopManagementScreen() {
     }
 
     try {
+      const nextStatus = getNextStatus(order.status);
       await updateDoc(doc(db, "laundryShops", shopId, "orders", order.id), {
-        status: getNextStatus(order.status),
+        status: nextStatus,
         updatedAt: serverTimestamp(),
       });
+
+      if (nextStatus === "completed" && order.customerUid) {
+        await setDoc(
+          doc(db, "laundryShops", shopId, "reviewEligibleUsers", order.customerUid),
+          {
+            shopId,
+            userUid: order.customerUid,
+            unlockedByOrderId: order.id,
+            unlockedAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
     } catch {
       setErrorText("Unable to update booking status.");
     }
@@ -770,6 +866,7 @@ export default function ShopManagementScreen() {
         customerUid: user.uid,
         customerName: "Sample Customer",
         customerNameCurrent: "Sample Customer",
+        isDemo: true,
         serviceType: "Standard Service",
         pickupDate: new Date().toISOString().slice(0, 10),
         totalAmount: shopDraft.priceLabel,
@@ -780,6 +877,111 @@ export default function ShopManagementScreen() {
       setSuccessText("Demo booking added.");
     } catch {
       setErrorText("Unable to add demo booking. Please check Firestore rules.");
+    }
+  };
+
+  const openEditDemoBooking = (order: ManagedOrder) => {
+    if (!order.isDemo) {
+      setErrorText("Only demo bookings can be edited here.");
+      setSuccessText("");
+      return;
+    }
+
+    clearMessages();
+    setBookingEditorId(order.id);
+    setBookingCustomerName(order.customerName);
+    setBookingServiceType(order.serviceType);
+    setBookingPickupDate(order.pickupDate);
+    setBookingTotalAmount(order.totalAmount);
+    setBookingStatus(
+      ORDER_STATUSES.includes(order.status) ? order.status : ORDER_STATUSES[0]
+    );
+    setIsBookingDialogOpen(true);
+  };
+
+  const closeBookingDialog = () => {
+    setIsBookingDialogOpen(false);
+    setBookingEditorId(null);
+    setBookingCustomerName("");
+    setBookingServiceType("Standard Service");
+    setBookingPickupDate("");
+    setBookingTotalAmount("");
+    setBookingStatus("new");
+  };
+
+  const saveDemoBooking = async () => {
+    if (!shopId || !bookingEditorId) {
+      return;
+    }
+
+    clearMessages();
+
+    const normalizedCustomerName = bookingCustomerName.trim();
+    const normalizedServiceType = bookingServiceType.trim();
+    const normalizedPickupDate = bookingPickupDate.trim();
+    const normalizedTotalAmount = bookingTotalAmount.trim();
+
+    if (!normalizedCustomerName) {
+      setErrorText("Customer name is required.");
+      return;
+    }
+
+    if (!normalizedServiceType) {
+      setErrorText("Service type is required.");
+      return;
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedPickupDate)) {
+      setErrorText("Pickup date must be in YYYY-MM-DD format.");
+      return;
+    }
+
+    if (!normalizedTotalAmount) {
+      setErrorText("Total amount is required.");
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, "laundryShops", shopId, "orders", bookingEditorId), {
+        customerName: normalizedCustomerName,
+        customerNameCurrent: normalizedCustomerName,
+        serviceType: normalizedServiceType,
+        pickupDate: normalizedPickupDate,
+        totalAmount: normalizedTotalAmount,
+        status: bookingStatus,
+        updatedAt: serverTimestamp(),
+      });
+      setSuccessText("Demo booking updated.");
+      closeBookingDialog();
+    } catch {
+      setErrorText("Unable to update demo booking.");
+    }
+  };
+
+  const deleteDemoBooking = async (order: ManagedOrder) => {
+    if (!shopId) {
+      return;
+    }
+    if (!order.isDemo) {
+      setErrorText("Only demo bookings can be deleted here.");
+      setSuccessText("");
+      return;
+    }
+
+    clearMessages();
+    const shouldDelete = await confirmAction(
+      "Delete demo booking?",
+      "This demo booking will be permanently removed."
+    );
+    if (!shouldDelete) {
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, "laundryShops", shopId, "orders", order.id));
+      setSuccessText("Demo booking deleted.");
+    } catch {
+      setErrorText("Unable to delete demo booking.");
     }
   };
 
@@ -844,15 +1046,15 @@ export default function ShopManagementScreen() {
           <Text style={styles.subtitle}>Configure your shop and keep customer pages synced.</Text>
 
           <View style={styles.statusRow}>
-            <View style={[styles.statusPill, shopDraft.isOpen ? styles.statusPillOpen : styles.statusPillClosed]}>
-              <Text style={styles.statusPillText}>{shopDraft.isOpen ? "Open" : "Closed"}</Text>
+            <View style={[styles.statusPill, shopDraft.isActive ? styles.statusPillOpen : styles.statusPillClosed]}>
+              <Text style={styles.statusPillText}>{shopDraft.isActive ? "Active" : "Inactive"}</Text>
             </View>
             <Text style={styles.statusLabel}>{shopStatusText}</Text>
             <View style={styles.statusSwitchWrap}>
-              <Text style={styles.statusSwitchText}>Shop Status</Text>
+              <Text style={styles.statusSwitchText}>Active for customers</Text>
               <Switch
-                value={shopDraft.isOpen}
-                onValueChange={(value) => handleShopField("isOpen", value)}
+                value={shopDraft.isActive}
+                onValueChange={updateActiveStatus}
                 trackColor={{ false: "#94A3B8", true: "#34D399" }}
                 thumbColor="#FFFFFF"
               />
@@ -1092,8 +1294,11 @@ export default function ShopManagementScreen() {
                       <TouchableOpacity style={[styles.smallButton, window.enabled && styles.smallButtonOn]} onPress={() => toggleWindowEnabled(window.id)}>
                         <Text style={[styles.smallButtonText, window.enabled && styles.smallButtonTextOn]}>{window.enabled ? "Enabled" : "Disabled"}</Text>
                       </TouchableOpacity>
+                      <TouchableOpacity style={styles.smallButton} onPress={() => startEditingPickupWindow(window.id)}>
+                        <Text style={styles.smallButtonText}>Edit</Text>
+                      </TouchableOpacity>
                       <TouchableOpacity style={styles.smallButton} onPress={() => void removeWindow(window.id)}>
-                        <Text style={styles.smallButtonText}>Remove</Text>
+                        <Text style={styles.smallButtonText}>Delete</Text>
                       </TouchableOpacity>
                     </View>
                   ) : (
@@ -1200,14 +1405,27 @@ export default function ShopManagementScreen() {
                   <Text style={styles.listTitle}>{order.customerNameDisplay}</Text>
                   <Text style={styles.listSubtext}>{order.serviceType} | Pickup {order.pickupDate}</Text>
                   <Text style={styles.listSubtext}>Total: {order.totalAmount}</Text>
+                  <Text style={styles.listSubtext}>Type: {order.isDemo ? "Demo booking" : "Live booking"}</Text>
                   <View style={styles.listActions}>
                     <View style={styles.statusChip}>
                       <Text style={styles.statusChipText}>{order.status}</Text>
                     </View>
                     {isBookingsOpen ? (
-                      <TouchableOpacity style={[styles.smallButton, styles.smallButtonOn]} onPress={() => void updateOrderStatus(order)}>
-                        <Text style={[styles.smallButtonText, styles.smallButtonTextOn]}>Update</Text>
-                      </TouchableOpacity>
+                      <>
+                        <TouchableOpacity style={[styles.smallButton, styles.smallButtonOn]} onPress={() => void updateOrderStatus(order)}>
+                          <Text style={[styles.smallButtonText, styles.smallButtonTextOn]}>Update</Text>
+                        </TouchableOpacity>
+                        {order.isDemo ? (
+                          <>
+                            <TouchableOpacity style={styles.smallButton} onPress={() => openEditDemoBooking(order)}>
+                              <Text style={styles.smallButtonText}>Edit</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[styles.smallButton, styles.smallButtonDanger]} onPress={() => void deleteDemoBooking(order)}>
+                              <Text style={[styles.smallButtonText, styles.smallButtonDangerText]}>Delete</Text>
+                            </TouchableOpacity>
+                          </>
+                        ) : null}
+                      </>
                     ) : null}
                   </View>
                 </View>
@@ -1446,11 +1664,11 @@ export default function ShopManagementScreen() {
           visible={isPickupWindowDialogOpen}
           transparent
           animationType="fade"
-          onRequestClose={closePickupWindowDialog}
+              onRequestClose={closePickupWindowDialog}
         >
           <View style={styles.dialogBackdrop}>
             <View style={styles.dialogCard}>
-              <Text style={styles.cardTitle}>Add Pickup Window</Text>
+              <Text style={styles.cardTitle}>{pickupWindowEditorId ? "Edit Pickup Window" : "Add Pickup Window"}</Text>
               <Text style={styles.cardHint}>Set start/end hour and service type for this window.</Text>
 
               <View style={styles.twoColumn}>
@@ -1489,8 +1707,63 @@ export default function ShopManagementScreen() {
                 <TouchableOpacity style={[styles.smallButton, styles.flexButton]} onPress={closePickupWindowDialog}>
                   <Text style={styles.smallButtonText}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.primaryButton, styles.flexButton, styles.dialogPrimaryButton]} onPress={addWindow}>
-                  <Text style={styles.primaryButtonText}>Add Window</Text>
+                <TouchableOpacity style={[styles.primaryButton, styles.flexButton, styles.dialogPrimaryButton]} onPress={saveWindow}>
+                  <Text style={styles.primaryButtonText}>{pickupWindowEditorId ? "Update Window" : "Add Window"}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={isBookingDialogOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={closeBookingDialog}
+        >
+          <View style={styles.dialogBackdrop}>
+            <View style={styles.dialogCard}>
+              <Text style={styles.cardTitle}>Edit Demo Booking</Text>
+
+              <Text style={styles.fieldLabel}>Customer name</Text>
+              <TextInput style={styles.input} value={bookingCustomerName} onChangeText={setBookingCustomerName} />
+
+              <Text style={styles.fieldLabel}>Service type</Text>
+              <TextInput style={styles.input} value={bookingServiceType} onChangeText={setBookingServiceType} />
+
+              <Text style={styles.fieldLabel}>Pickup date (YYYY-MM-DD)</Text>
+              <TextInput style={styles.input} value={bookingPickupDate} onChangeText={setBookingPickupDate} />
+
+              <Text style={styles.fieldLabel}>Total amount</Text>
+              <TextInput style={styles.input} value={bookingTotalAmount} onChangeText={setBookingTotalAmount} />
+
+              <Text style={styles.fieldLabel}>Status</Text>
+              <View style={styles.toggleRow}>
+                {ORDER_STATUSES.map((statusOption) => {
+                  const active = bookingStatus === statusOption;
+                  return (
+                    <TouchableOpacity
+                      key={statusOption}
+                      style={[styles.toggleButton, active && styles.toggleOn]}
+                      onPress={() => setBookingStatus(statusOption)}
+                    >
+                      <Text style={[styles.toggleText, active && styles.toggleTextOn]}>
+                        {statusOption.toUpperCase()}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <View style={styles.dialogActions}>
+                <TouchableOpacity style={[styles.smallButton, styles.flexButton]} onPress={closeBookingDialog}>
+                  <Text style={styles.smallButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.primaryButton, styles.flexButton, styles.dialogPrimaryButton]}
+                  onPress={() => void saveDemoBooking()}
+                >
+                  <Text style={styles.primaryButtonText}>Save Demo Booking</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1630,8 +1903,10 @@ const styles = StyleSheet.create({
   listActions: { marginTop: 8, flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
   smallButton: { borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 12, paddingHorizontal: 12, minHeight: 34, alignItems: "center", justifyContent: "center", backgroundColor: "#FFFFFF" },
   smallButtonOn: { borderColor: "#2E95D3", backgroundColor: "#E7F6FF" },
+  smallButtonDanger: { borderColor: "#DC2626", backgroundColor: "#FEE2E2" },
   smallButtonText: { fontSize: 12, color: "#334155", fontWeight: "700" },
   smallButtonTextOn: { color: "#145A86" },
+  smallButtonDangerText: { color: "#991B1B" },
   sectionHeaderRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },
   sectionHeaderCopy: { flex: 1, minWidth: 0 },
   summaryBlock: { marginTop: 6 },

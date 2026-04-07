@@ -3,7 +3,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { collection, doc, getDoc, onSnapshot } from "firebase/firestore";
+import { collection, collectionGroup, doc, getDoc, onSnapshot } from "firebase/firestore";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -22,6 +22,11 @@ import { parseLaundryShop, type LaundryShop } from "../../lib/laundry-shops";
 
 const DEFAULT_SHOP_IMAGE = require("../../assets/images/slide1.png");
 
+type ShopReviewSummary = {
+  average: number;
+  count: number;
+};
+
 function getGreeting(): string {
   const hour = new Date().getHours();
   if (hour < 12) return "Good morning";
@@ -35,6 +40,7 @@ export default function HomeScreen() {
   const [missingContactMessage, setMissingContactMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [shops, setShops] = useState<LaundryShop[]>([]);
+  const [shopReviewSummaryById, setShopReviewSummaryById] = useState<Record<string, ShopReviewSummary>>({});
   const [isLoadingShops, setIsLoadingShops] = useState(true);
   const isLoggedIn = !!user;
 
@@ -52,6 +58,7 @@ export default function HomeScreen() {
       (snapshot) => {
         const parsed = snapshot.docs
           .map((item) => parseLaundryShop(item.id, item.data()))
+          .filter((shop) => shop.isActive)
           .sort((a, b) => a.distanceKm - b.distanceKm);
         setShops(parsed);
         setIsLoadingShops(false);
@@ -59,6 +66,53 @@ export default function HomeScreen() {
       () => {
         setShops([]);
         setIsLoadingShops(false);
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collectionGroup(db, "reviews"),
+      (snapshot) => {
+        const totalsByShop: Record<string, { sum: number; count: number }> = {};
+
+        snapshot.docs.forEach((reviewDoc) => {
+          const data = reviewDoc.data() as { rating?: unknown; shopId?: unknown };
+          const rating = Number(data.rating);
+          const shopIdRaw =
+            (typeof data.shopId === "string" && data.shopId) ||
+            reviewDoc.ref.parent.parent?.id ||
+            "";
+
+          if (!shopIdRaw || !Number.isFinite(rating) || rating < 1 || rating > 5) {
+            return;
+          }
+
+          if (!totalsByShop[shopIdRaw]) {
+            totalsByShop[shopIdRaw] = { sum: 0, count: 0 };
+          }
+
+          totalsByShop[shopIdRaw].sum += rating;
+          totalsByShop[shopIdRaw].count += 1;
+        });
+
+        const nextSummary: Record<string, ShopReviewSummary> = {};
+        Object.entries(totalsByShop).forEach(([shopId, totals]) => {
+          if (!totals.count) {
+            return;
+          }
+          nextSummary[shopId] = {
+            average: totals.sum / totals.count,
+            count: totals.count,
+          };
+        });
+
+        setShopReviewSummaryById(nextSummary);
+      },
+      () => {
+        setShopReviewSummaryById({});
       }
     );
 
@@ -173,42 +227,54 @@ export default function HomeScreen() {
                 <Text style={styles.loadingShopsText}>Loading nearby laundry shops...</Text>
               </View>
             ) : filteredLaundryShops.length ? (
-              filteredLaundryShops.map((item) => (
-                <View key={item.id} style={styles.shopCard}>
-                  <Image
-                    source={item.bannerImageUrl ? { uri: item.bannerImageUrl } : DEFAULT_SHOP_IMAGE}
-                    style={styles.shopImage}
-                  />
-                  <View style={styles.shopInfo}>
-                    <Text style={styles.shopName}>{item.shopName}</Text>
+              filteredLaundryShops.map((item) => {
+                const reviewSummary = shopReviewSummaryById[item.id];
+                const ratingAverage = reviewSummary?.average ?? 0;
+                const ratingCount = reviewSummary?.count ?? 0;
 
-                    <View style={styles.ratingRow}>
-                      <Ionicons name="star" size={14} color="#F4C430" />
-                      <Text style={styles.ratingText}>{item.ratingAverage.toFixed(1)}</Text>
-                      <Text style={styles.reviewText}>({item.ratingCount} reviews)</Text>
-                    </View>
+                return (
+                  <View key={item.id} style={styles.shopCard}>
+                    <Image
+                      source={item.bannerImageUrl ? { uri: item.bannerImageUrl } : DEFAULT_SHOP_IMAGE}
+                      style={styles.shopImage}
+                    />
+                    <View style={styles.shopInfo}>
+                      <Text style={styles.shopName}>{item.shopName}</Text>
 
-                    <Text style={styles.shopAddress}>
-                      from {item.distanceKm.toFixed(1)} km | {item.address || "Address not set"}
-                    </Text>
+                      <View style={styles.ratingRow}>
+                        <Ionicons name="star" size={14} color="#F4C430" />
+                        {ratingCount ? (
+                          <>
+                            <Text style={styles.ratingText}>{ratingAverage.toFixed(1)}</Text>
+                            <Text style={styles.reviewText}>({ratingCount} reviews)</Text>
+                          </>
+                        ) : (
+                          <Text style={styles.noReviewTextInline}>No reviews yet</Text>
+                        )}
+                      </View>
 
-                    <View style={styles.shopFooter}>
-                      <Text style={styles.shopPrice}>{item.priceLabel}</Text>
-                      <TouchableOpacity
-                        style={styles.viewButton}
-                        onPress={() =>
-                          router.push({
-                            pathname: "/(tabs)/laundry-shop",
-                            params: { shopId: item.id },
-                          })
-                        }
-                      >
-                        <Text style={styles.viewButtonText}>View Services</Text>
-                      </TouchableOpacity>
+                      <Text style={styles.shopAddress}>
+                        from {item.distanceKm.toFixed(1)} km | {item.address || "Address not set"}
+                      </Text>
+
+                      <View style={styles.shopFooter}>
+                        <Text style={styles.shopPrice}>{item.priceLabel}</Text>
+                        <TouchableOpacity
+                          style={styles.viewButton}
+                          onPress={() =>
+                            router.push({
+                              pathname: "/(tabs)/laundry-shop",
+                              params: { shopId: item.id },
+                            })
+                          }
+                        >
+                          <Text style={styles.viewButtonText}>View Services</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   </View>
-                </View>
-              ))
+                );
+              })
             ) : (
               <Text style={styles.noResultText}>
                 {searchQuery.trim()
@@ -389,6 +455,12 @@ const styles = StyleSheet.create({
     marginLeft: 4,
     color: "#7A7A7A",
     fontSize: 12,
+  },
+  noReviewTextInline: {
+    marginLeft: 6,
+    color: "#7A7A7A",
+    fontSize: 12,
+    fontWeight: "600",
   },
 
   shopAddress: {

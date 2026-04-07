@@ -61,6 +61,7 @@ export type LaundryShop = {
   ratingAverage: number;
   ratingCount: number;
   distanceKm: number;
+  isActive: boolean;
   isOpen: boolean;
   openingTime: string;
   closingTime: string;
@@ -481,6 +482,7 @@ export function parseLaundryShop(id: string, data: unknown): LaundryShop {
 
   const minPrice = Math.max(0, safeNumber(source.priceRangeMin, 0));
   const maxPrice = Math.max(0, safeNumber(source.priceRangeMax, 0));
+  const isActive = safeBoolean(source.isActive, safeBoolean(source.isOpen, true));
 
   return {
     id,
@@ -491,10 +493,11 @@ export function parseLaundryShop(id: string, data: unknown): LaundryShop {
     contactNumber: safeString(source.contactNumber),
     address: normalizedAddress,
     addressFields,
-    ratingAverage: safeNumber(source.ratingAverage, 4.2),
+    ratingAverage: safeNumber(source.ratingAverage, 0),
     ratingCount: Math.max(0, safeNumber(source.ratingCount, 0)),
     distanceKm: Math.max(0, safeNumber(source.distanceKm, 0.9)),
-    isOpen: safeBoolean(source.isOpen, true),
+    isActive,
+    isOpen: isActive,
     openingTime: sanitizeTimeString(source.openingTime, "08:00"),
     closingTime: sanitizeTimeString(source.closingTime, "19:00"),
     standardCutoffTime: sanitizeTimeString(source.standardCutoffTime, "19:00"),
@@ -523,9 +526,10 @@ export function makeDefaultShopPayload(ownerUid: string, ownerEmail: string): Un
     contactNumber: "",
     address: "",
     addressFields: { ...EMPTY_ADDRESS_FIELDS },
-    ratingAverage: 4.2,
+    ratingAverage: 0,
     ratingCount: 0,
     distanceKm: 0.9,
+    isActive: true,
     isOpen: true,
     openingTime: "08:00",
     closingTime: "19:00",
@@ -585,7 +589,7 @@ export function isShopAutoOpen(shop: LaundryShop, now = new Date()): boolean {
 }
 
 export function isShopCurrentlyOpen(shop: LaundryShop, now = new Date()): boolean {
-  if (!shop.isOpen) {
+  if (!shop.isActive) {
     return false;
   }
   return isShopAutoOpen(shop, now);
@@ -623,4 +627,3 @@ export function getVisiblePickupWindows(
 export function getCutoffHour(shop: LaundryShop): number {
   return Number(shop.standardCutoffTime.split(":")[0] ?? 19);
 }
-
