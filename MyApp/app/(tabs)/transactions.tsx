@@ -4,6 +4,7 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 import { collection, limit, onSnapshot, query, where } from "firebase/firestore";
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  Modal,
   ScrollView,
   SafeAreaView,
   StyleSheet,
@@ -19,11 +20,18 @@ type TransactionItem = {
   amount: string;
   status: string;
   userNameDisplay: string;
+  shopName: string;
+  serviceType: string;
+  loadCategory: string;
+  selectedServices: string[];
+  pickupDate: string;
+  deliveryDate: string;
 };
 
 export default function TransactionsScreen() {
   const [user, setUser] = useState<User | null>(auth.currentUser);
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
+  const [selectedTransaction, setSelectedTransaction] = useState<TransactionItem | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
@@ -59,10 +67,25 @@ export default function TransactionsScreen() {
 
           return {
             id: record.id,
-            title: (data.title as string) || "Laundry Order",
-            amount: (data.amount as string) || "Amount pending",
+            title:
+              (data.title as string) ||
+              `${(data.shopName as string) || "Laundry Shop"} - ${
+                (data.serviceType as string) || "Service"
+              }`,
+            amount:
+              (data.totalAmount as string) ||
+              (data.amount as string) ||
+              "Amount pending",
             status: (data.status as string) || "Pending",
             userNameDisplay,
+            shopName: (data.shopName as string) || "Laundry Shop",
+            serviceType: (data.serviceType as string) || "Standard",
+            loadCategory: (data.loadCategory as string) || "Load",
+            selectedServices: Array.isArray(data.selectedServices)
+              ? (data.selectedServices as string[])
+              : [],
+            pickupDate: (data.pickupDate as string) || "",
+            deliveryDate: (data.deliveryDate as string) || "",
           };
         });
         setTransactions(mapped);
@@ -102,12 +125,17 @@ export default function TransactionsScreen() {
               showsVerticalScrollIndicator={false}
             >
               {transactions.map((transaction) => (
-                <View key={transaction.id} style={styles.itemCard}>
+                <TouchableOpacity
+                  key={transaction.id}
+                  style={styles.itemCard}
+                  onPress={() => setSelectedTransaction(transaction)}
+                >
                   <Text style={styles.itemTitle}>{transaction.title}</Text>
                   <Text style={styles.itemMeta}>Customer: {transaction.userNameDisplay}</Text>
                   <Text style={styles.itemMeta}>Amount: {transaction.amount}</Text>
                   <Text style={styles.itemMeta}>Status: {transaction.status}</Text>
-                </View>
+                  <Text style={styles.itemMeta}>Tap to view details</Text>
+                </TouchableOpacity>
               ))}
             </ScrollView>
           ) : (
@@ -121,6 +149,56 @@ export default function TransactionsScreen() {
           )}
         </View>
       </SafeAreaView>
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={!!selectedTransaction}
+        onRequestClose={() => setSelectedTransaction(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Transaction Details</Text>
+            <Text style={styles.modalLabel}>Shop</Text>
+            <Text style={styles.modalValue}>
+              {selectedTransaction?.shopName || "Laundry Shop"}
+            </Text>
+            <Text style={styles.modalLabel}>Service Type</Text>
+            <Text style={styles.modalValue}>
+              {selectedTransaction?.serviceType || "Standard"}
+            </Text>
+            <Text style={styles.modalLabel}>Load</Text>
+            <Text style={styles.modalValue}>
+              {selectedTransaction?.loadCategory || "Load"}
+            </Text>
+            <Text style={styles.modalLabel}>Selected Services</Text>
+            <Text style={styles.modalValue}>
+              {selectedTransaction?.selectedServices?.length
+                ? selectedTransaction.selectedServices.join(" + ")
+                : "Not specified"}
+            </Text>
+            <Text style={styles.modalLabel}>Pickup Date</Text>
+            <Text style={styles.modalValue}>
+              {selectedTransaction?.pickupDate || "Not set"}
+            </Text>
+            <Text style={styles.modalLabel}>Delivery Date</Text>
+            <Text style={styles.modalValue}>
+              {selectedTransaction?.deliveryDate || "Not set"}
+            </Text>
+            <Text style={styles.modalLabel}>Amount</Text>
+            <Text style={styles.modalValue}>{selectedTransaction?.amount || "Amount pending"}</Text>
+            <Text style={styles.modalLabel}>Status</Text>
+            <Text style={styles.modalValue}>{selectedTransaction?.status || "Pending"}</Text>
+
+            <TouchableOpacity
+              style={styles.modalCloseButton}
+              onPress={() => setSelectedTransaction(null)}
+            >
+              <Text style={styles.modalCloseText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </LinearGradient>
   );
 }
@@ -201,5 +279,49 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#475569",
     marginTop: 2,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.6)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#0F172A",
+    marginBottom: 8,
+  },
+  modalLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#64748B",
+    marginTop: 10,
+  },
+  modalValue: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0F172A",
+    marginTop: 2,
+  },
+  modalCloseButton: {
+    marginTop: 16,
+    borderRadius: 12,
+    backgroundColor: "#F4C430",
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  modalCloseText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
   },
 });

@@ -654,6 +654,17 @@ export default function BookServiceScreen() {
   }, [serviceSupportMap, selectedServiceType]);
 
   React.useEffect(() => {
+    const parsedBookingDate = parseYmd(bookingDate);
+    if (!parsedBookingDate) {
+      return;
+    }
+    const bookingDiff = daysBetween(today, parsedBookingDate);
+    if (bookingDiff > 0 && errorMessage.includes("Laundry accepts orders from")) {
+      setErrorMessage("");
+    }
+  }, [bookingDate, errorMessage, today]);
+
+  React.useEffect(() => {
     if (!loadCategory || !selectedShop) {
       return;
     }
@@ -933,8 +944,17 @@ export default function BookServiceScreen() {
       return;
     }
 
+    if (!isDateWithinRange(parsedBookingDate, today, addDays(today, 3))) {
+      setErrorMessage("Booking date must be within today to 3 days ahead.");
+      return;
+    }
+
+    const bookingDiff = daysBetween(today, parsedBookingDate);
     const currentHour = new Date().getHours();
-    if (currentHour < openingHour || currentHour >= closingHour) {
+    if (
+      bookingDiff === 0 &&
+      (currentHour < openingHour || currentHour >= closingHour)
+    ) {
       setErrorMessage(
         `Laundry accepts orders from ${formatHourLabel(openingHour)} to ${formatHourLabel(
           Math.max(openingHour + 1, closingHour)
@@ -942,13 +962,6 @@ export default function BookServiceScreen() {
       );
       return;
     }
-
-    if (!isDateWithinRange(parsedBookingDate, today, addDays(today, 3))) {
-      setErrorMessage("Booking date must be within today to 3 days ahead.");
-      return;
-    }
-
-    const bookingDiff = daysBetween(today, parsedBookingDate);
 
     let readyMessage = "";
     if (resolvedServiceType === "standard") {
@@ -1042,7 +1055,7 @@ export default function BookServiceScreen() {
         ? savedAddress
         : buildAddressLabel(trimmedAddress);
 
-      await addDoc(collection(db, "laundryShops", selectedShop.id, "orders"), {
+      const orderPayload = {
         customerUid: userId,
         customerEmail: auth.currentUser?.email ?? "",
         customerName: fullName,
@@ -1060,9 +1073,40 @@ export default function BookServiceScreen() {
         status: "new",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      });
+      };
 
+      await addDoc(collection(db, "laundryShops", selectedShop.id, "orders"), orderPayload);
+      await addDoc(collection(db, "transactions"), {
+        userUid: userId,
+        shopId: selectedShop.id,
+        shopName: selectedShop.shopName,
+        serviceType: orderPayload.serviceType,
+        loadCategory: orderPayload.loadCategory,
+        selectedServices: orderPayload.selectedServices,
+        pickupDate: orderPayload.pickupDate,
+        deliveryDate: orderPayload.deliveryDate,
+        totalAmount: orderPayload.totalAmount,
+        status: orderPayload.status,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
       setSuccessMessage(`${readyMessage}${savedNotice} Booking placed successfully.`);
+      setLoadCategory("");
+      setSelectedLoadServiceIds([]);
+      setSelectedServiceType("");
+      setSelectedStandardWindow("");
+      setPickupMode("now");
+      setSelectedExpressSlot("");
+      setBookingDate(formatYmd(today));
+      setDeliveryDate(formatYmd(today));
+      setAddressMode(savedAddress.trim() ? "saved" : "new");
+      setHouseUnit("");
+      setStreetName("");
+      setBarangay("");
+      setCityMunicipality("");
+      setProvince("");
+      setZipCode("");
+      router.replace("/(tabs)/transactions");
     } catch {
       setErrorMessage("Unable to place booking right now. Please try again.");
     }

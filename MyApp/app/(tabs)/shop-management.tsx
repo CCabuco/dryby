@@ -70,6 +70,11 @@ type ProfileEditorSection = "basic" | "address" | "operations" | "services" | "b
 const ORDER_STATUSES = ["new", "accepted", "processing", "ready", "completed"];
 const WEEKDAY_OPTIONS: DayKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const WEEKEND_OPTIONS: DayKey[] = ["Sat", "Sun"];
+const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
+  const hours = Math.floor(index / 2);
+  const minutes = index % 2 === 0 ? "00" : "30";
+  return `${String(hours).padStart(2, "0")}:${minutes}`;
+});
 
 const DEFAULT_SERVICE_ACTIONS: ServiceActionState = {
   wash: true,
@@ -195,6 +200,7 @@ export default function ShopManagementScreen() {
   const { width } = useWindowDimensions();
   const [shopId, setShopId] = useState("");
   const [shopDraft, setShopDraft] = useState<LaundryShop | null>(null);
+  const [shopBase, setShopBase] = useState<LaundryShop | null>(null);
   const [services, setServices] = useState<LaundryService[]>([]);
   const [orders, setOrders] = useState<ManagedOrder[]>([]);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
@@ -237,30 +243,30 @@ export default function ShopManagementScreen() {
     setSuccessText("");
   };
 
-  const updateActiveStatus = async (value: boolean) => {
-    if (!shopId) {
-      return;
-    }
-    clearMessages();
+  const updateActiveStatus = (value: boolean) => {
     updateShop((previous) => ({
       ...previous,
       isActive: value,
       isOpen: value,
     }));
+  };
+
+  const saveActiveStatus = async () => {
+    if (!shopId || !shopDraft) {
+      return;
+    }
+    clearMessages();
     try {
       await updateDoc(doc(db, "laundryShops", shopId), {
-        isActive: value,
-        isOpen: value,
+        isActive: shopDraft.isActive,
+        isOpen: shopDraft.isActive,
         updatedAt: serverTimestamp(),
       });
-      setSuccessText(value ? "Shop is now active." : "Shop set to inactive.");
+      setSuccessText(
+        shopDraft.isActive ? "Shop status saved as active." : "Shop status saved as inactive."
+      );
     } catch {
-      updateShop((previous) => ({
-        ...previous,
-        isActive: !value,
-        isOpen: !value,
-      }));
-      setErrorText("Unable to update shop status.");
+      setErrorText("Unable to save shop status.");
     }
   };
 
@@ -399,9 +405,13 @@ export default function ShopManagementScreen() {
 
         unsubscribeShop = onSnapshot(doc(db, "laundryShops", activeShopId), (snapshot) => {
           if (!snapshot.exists()) {
+            setShopDraft(null);
+            setShopBase(null);
             return;
           }
-          setShopDraft(parseLaundryShop(snapshot.id, snapshot.data()));
+          const parsed = parseLaundryShop(snapshot.id, snapshot.data());
+          setShopDraft(parsed);
+          setShopBase(parsed);
         });
 
         unsubscribeServices = onSnapshot(
@@ -1037,6 +1047,7 @@ export default function ShopManagementScreen() {
 
   const priceRange = priceRangeLabel;
   const isDesktop = width >= 920;
+  const statusDirty = !!shopDraft && !!shopBase && shopDraft.isActive !== shopBase.isActive;
 
   return (
     <LinearGradient colors={["#55B7E9", "#2E95D3"]} style={styles.container}>
@@ -1059,6 +1070,11 @@ export default function ShopManagementScreen() {
                 thumbColor="#FFFFFF"
               />
             </View>
+            {statusDirty ? (
+              <TouchableOpacity style={styles.smallButton} onPress={() => void saveActiveStatus()}>
+                <Text style={styles.smallButtonText}>Save Status</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           {!!errorText && <Text style={styles.errorText}>{errorText}</Text>}

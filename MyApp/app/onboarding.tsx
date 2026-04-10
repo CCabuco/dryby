@@ -60,11 +60,13 @@ export default function OnboardingScreen() {
         animated: true,
       });
     } else {
+      void setOnboardingSeen(true);
       setShowGetStartedPrompt(true);
     }
   };
 
   const handleSkip = () => {
+    void setOnboardingSeen(true);
     setShowGetStartedPrompt(true);
   };
 
