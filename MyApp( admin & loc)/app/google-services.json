@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "643767485510",
+    "project_id": "dryby-5f894",
+    "storage_bucket": "dryby-5f894.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:643767485510:android:d2ad8d3cf10c5c53343647",
+        "android_client_info": {
+          "package_name": "www.dryby_1.com"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCI0dygUMHfIe_nZzYHQIRlEV1Xo7qtF9E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

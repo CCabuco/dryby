@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "dryby-fi"
+  },
+  "targets": {
+    "dryby-fi": {
+      "hosting": {
+        "dryby-fi": [
+          "dryby-fi"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

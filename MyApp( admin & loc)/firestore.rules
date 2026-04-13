@@ -1,0 +1,168 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function verifiedUser() {
+      return signedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    function reviewKeysValid(data) {
+      return data.keys().hasAll([
+        "shopId",
+        "userUid",
+        "userName",
+        "rating",
+        "comment",
+        "createdAt",
+        "updatedAt",
+      ]) &&
+      data.keys().hasOnly([
+        "shopId",
+        "userUid",
+        "userName",
+        "rating",
+        "comment",
+        "createdAt",
+        "updatedAt",
+      ]);
+    }
+
+    function reviewPayloadValid(data, shopId) {
+      return reviewKeysValid(data)
+        && data.shopId == shopId
+        && data.userUid == request.auth.uid
+        && data.userName is string
+        && data.userName.size() >= 2
+        && data.userName.size() <= 80
+        && data.comment is string
+        && data.comment.size() >= 5
+        && data.comment.size() <= 500
+        && (data.rating is int || data.rating is float)
+        && data.rating >= 1
+        && data.rating <= 5;
+    }
+
+    function shopOwnerUid(shopId) {
+      return get(/databases/$(database)/documents/laundryShops/$(shopId)).data.ownerUid;
+    }
+
+    function isShopOwner(shopId) {
+      return signedIn() && shopOwnerUid(shopId) == request.auth.uid;
+    }
+
+    function canReviewShop(shopId) {
+      return signedIn()
+        && exists(
+          /databases/$(database)/documents/laundryShops/$(shopId)/reviewEligibleUsers/$(request.auth.uid)
+        );
+    }
+
+    // User profile
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow update: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Main shop collection
+    match /laundryShops/{shopId} {
+      allow read: if true;
+      allow create: if signedIn()
+        && (request.resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow update, delete: if signedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+
+      // Review eligibility grants generated when an order is completed.
+      match /reviewEligibleUsers/{uid} {
+        allow read: if signedIn() && (uid == request.auth.uid || isShopOwner(shopId) || isAdmin());
+        allow create, update: if (isShopOwner(shopId) || isAdmin())
+          && request.resource.data.shopId == shopId
+          && request.resource.data.userUid == uid;
+        allow delete: if isShopOwner(shopId) || isAdmin();
+      }
+
+      // Real user reviews only (1 review per user per shop)
+      match /reviews/{reviewId} {
+        allow read: if true;
+
+        allow create: if verifiedUser()
+          && canReviewShop(shopId)
+          && reviewId == request.auth.uid
+          && reviewPayloadValid(request.resource.data, shopId)
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+
+        allow update: if verifiedUser()
+          && canReviewShop(shopId)
+          && reviewId == request.auth.uid
+          && resource.data.userUid == request.auth.uid
+          && reviewPayloadValid(request.resource.data, shopId)
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time;
+
+        allow delete: if isAdmin();
+      }
+
+      // Shop services managed by owner, visible to all users
+      match /services/{serviceId} {
+        allow read: if true;
+        allow create, update, delete: if isShopOwner(shopId) || isAdmin();
+      }
+
+      // Shop orders: customers create/read own; owners read/update all for their shop
+      match /orders/{orderId} {
+        allow create: if signedIn()
+          && request.resource.data.customerUid == request.auth.uid
+          && request.resource.data.shopId == shopId;
+
+        allow read: if signedIn()
+          && (resource.data.customerUid == request.auth.uid || isShopOwner(shopId) || isAdmin());
+
+        allow update: if signedIn()
+          && (isShopOwner(shopId) || resource.data.customerUid == request.auth.uid || isAdmin());
+
+        allow delete: if signedIn() && (isShopOwner(shopId) || isAdmin());
+      }
+    }
+
+    // User-facing transaction history
+    match /transactions/{transactionId} {
+      allow create: if signedIn() && (request.resource.data.userUid == request.auth.uid || isAdmin());
+      allow read, update: if signedIn() && (resource.data.userUid == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Optional top-level collections used by account audit sync
+    match /orders/{orderId} {
+      allow create: if signedIn() && (request.resource.data.userUid == request.auth.uid || isAdmin());
+      allow read, update: if signedIn() && (resource.data.userUid == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /laundries/{laundryId} {
+      allow create: if signedIn() && (request.resource.data.userUid == request.auth.uid || isAdmin());
+      allow read, update: if signedIn() && (resource.data.userUid == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Public announcements for everyone
+    match /announcements/{announcementId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

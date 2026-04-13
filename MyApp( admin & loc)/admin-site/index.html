@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DryBy Admin Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">Connected Website</p>
+          <h1>DryBy Admin</h1>
+          <p class="sidebar-copy">
+            Standalone website for managing the same Firebase data used by the DryBy mobile app.
+          </p>
+        </div>
+
+        <nav class="nav" id="nav-tabs">
+          <button class="nav-tab is-active" data-tab="overview">Overview</button>
+          <button class="nav-tab" data-tab="shops">Shops</button>
+          <button class="nav-tab" data-tab="users">Users</button>
+          <button class="nav-tab" data-tab="transactions">Transactions</button>
+          <button class="nav-tab" data-tab="announcements">Announcements</button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="signed-in-meta" id="signed-in-meta">Not signed in</div>
+          <button class="ghost-button" id="sign-out-btn" type="button">Sign Out</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="hero">
+          <p class="eyebrow">Standalone Website</p>
+          <h2>Admin Portal</h2>
+          <p>
+            Review users, moderate laundry shops, inspect transactions, and publish announcements
+            for the app from one browser-based dashboard.
+          </p>
+        </section>
+
+        <section class="panel" id="auth-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Admin Access</p>
+              <h3>Sign In</h3>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <label class="field">
+              <span>Email</span>
+              <input id="email-input" type="email" placeholder="admin@example.com" />
+            </label>
+
+            <label class="field">
+              <span>Password</span>
+              <input id="password-input" type="password" placeholder="Enter password" />
+            </label>
+          </div>
+
+          <p class="message error" id="auth-error"></p>
+
+          <div class="button-row">
+            <button class="primary-button" id="sign-in-btn" type="button">Sign In</button>
+          </div>
+        </section>
+
+        <section class="dashboard" id="dashboard" hidden>
+          <div class="stats-grid" id="stats-grid"></div>
+
+          <section class="panel tab-panel" data-panel="overview">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Overview</p>
+                <h3>Control Center</h3>
+              </div>
+            </div>
+            <div class="info-stack" id="overview-list"></div>
+          </section>
+
+          <section class="panel tab-panel" data-panel="shops" hidden>
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Shops</p>
+                <h3>Shop Moderation</h3>
+              </div>
+            </div>
+            <div class="card-list" id="shops-list"></div>
+          </section>
+
+          <section class="panel tab-panel" data-panel="users" hidden>
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Users</p>
+                <h3>Registered Accounts</h3>
+              </div>
+            </div>
+            <div class="card-list" id="users-list"></div>
+          </section>
+
+          <section class="panel tab-panel" data-panel="transactions" hidden>
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Transactions</p>
+                <h3>Order Activity</h3>
+              </div>
+            </div>
+            <div class="card-list" id="transactions-list"></div>
+          </section>
+
+          <section class="panel tab-panel" data-panel="announcements" hidden>
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Announcements</p>
+                <h3>Publish Updates</h3>
+              </div>
+            </div>
+
+            <div class="form-grid stacked">
+              <label class="field">
+                <span>Title</span>
+                <input id="announcement-title" type="text" placeholder="Promo update" />
+              </label>
+
+              <label class="field">
+                <span>Body</span>
+                <textarea
+                  id="announcement-body"
+                  rows="5"
+                  placeholder="Share a service advisory, promo, or notice."
+                ></textarea>
+              </label>
+            </div>
+
+            <p class="message" id="announcement-message"></p>
+
+            <div class="button-row">
+              <button class="primary-button" id="publish-btn" type="button">Publish Announcement</button>
+            </div>
+
+            <div class="card-list" id="announcements-list"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
