@@ -279,7 +279,7 @@ export default function TransactionsScreen() {
                         ]}
                       >
                         {isCompleted ? (
-                          <Ionicons name=\"checkmark\" size={14} color=\"#fff\" />
+                          <Ionicons name="checkmark" size={14} color="#fff" />
                         ) : (
                           <Text
                             style={[
