@@ -70,6 +70,18 @@ type SavedAddressEntry = {
   coordinates: { latitude: number; longitude: number } | null;
 };
 
+type BookingConfirmPayload = {
+  shopName: string;
+  serviceType: string;
+  loadCategory: string;
+  selectedServices: string[];
+  pickupDate: string;
+  pickupWindow: string;
+  deliveryDate: string;
+  priceLabel: string;
+  addressLabel: string;
+};
+
 function getCoordinateSummary(coordinates: { latitude: number; longitude: number } | null): string {
   return coordinates
     ? `${coordinates.latitude.toFixed(6)}, ${coordinates.longitude.toFixed(6)}`
@@ -393,6 +405,8 @@ export default function BookServiceScreen() {
 
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [confirmPayload, setConfirmPayload] = useState<BookingConfirmPayload | null>(null);
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [bookingStep, setBookingStep] = useState<BookingStep>(1);
   const [selectedServiceType, setSelectedServiceType] =
     useState<ServiceType | "">(initialServiceType);
@@ -1039,7 +1053,7 @@ export default function BookServiceScreen() {
     goNextStep();
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (skipConfirm = false) => {
     setErrorMessage("");
     setSuccessMessage("");
 
@@ -1129,9 +1143,10 @@ export default function BookServiceScreen() {
     }
 
     const bookingDiff = daysBetween(today, parsedBookingDate);
+    const isBookingToday = bookingDiff === 0;
     const currentHour = new Date().getHours();
     if (
-      bookingDiff === 0 &&
+      isBookingToday &&
       (currentHour < openingHour || currentHour >= closingHour)
     ) {
       setErrorMessage(
@@ -1144,7 +1159,7 @@ export default function BookServiceScreen() {
 
     let readyMessage = "";
     if (resolvedServiceType === "standard") {
-      if (bookingDiff === 0 && currentHour >= cutoffHour) {
+      if (isBookingToday && currentHour >= cutoffHour) {
         setErrorMessage(
           `Same-day standard booking is only before ${formatHourLabel(cutoffHour)}.`
         );
@@ -1187,55 +1202,6 @@ export default function BookServiceScreen() {
       readyMessage = `Express booking is ready: ${activeLoadCopy[loadCategory].title} | ${selectedLoadServiceNames.join(" + ")}.${note}`;
     }
 
-    let savedNotice = "";
-    if (!useSavedAddress && userId) {
-      const formattedAddress = buildAddressLabel(trimmedAddress);
-      try {
-        if (savedAddresses.length >= 5) {
-          setErrorMessage("You can save up to 5 addresses only.");
-          return;
-        }
-
-        const newEntry: SavedAddressEntry = {
-          id: `addr-${Date.now()}`,
-          label: `Address ${savedAddresses.length + 1}`,
-          fields: trimmedAddress,
-          coordinates: selectedCoordinates,
-        };
-        const nextEntries = [...savedAddresses, newEntry];
-
-        await setDoc(
-          doc(db, "users", userId),
-          {
-            addresses: nextEntries.map((entry) => ({
-              id: entry.id,
-              label: entry.label,
-              fields: {
-                ...entry.fields,
-                ...(entry.coordinates ?? {}),
-              },
-            })),
-            primaryAddressId: newEntry.id,
-            address: formattedAddress,
-            addressFields: {
-              ...trimmedAddress,
-              ...(selectedCoordinates ?? {}),
-            },
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true }
-        );
-        setSavedAddresses(nextEntries);
-        setSelectedSavedAddressId(newEntry.id);
-        setSavedAddress(formattedAddress);
-        setSavedCoordinates(selectedCoordinates);
-        savedNotice = " New address saved to your account.";
-      } catch {
-        setErrorMessage("Booking is ready, but we could not save your address. Please try again.");
-        return;
-      }
-    }
-
     try {
       const dailyOrdersSnapshot = await getDocs(
         query(
@@ -1262,6 +1228,74 @@ export default function BookServiceScreen() {
         ? savedAddress
         : buildAddressLabel(trimmedAddress);
       const customerCoordinates = useSavedAddress ? savedCoordinates : selectedCoordinates;
+
+      const confirmData: BookingConfirmPayload = {
+        shopName: selectedShop.shopName,
+        serviceType: resolvedServiceType === "express" ? "Express" : "Standard",
+        loadCategory: activeLoadCopy[loadCategory].title,
+        selectedServices: selectedLoadServiceNames,
+        pickupDate: bookingDate,
+        pickupWindow: pickupLabel,
+        deliveryDate:
+          resolvedServiceType === "express" ? deliveryDate : "Not yet scheduled",
+        priceLabel: selectedShop.priceLabel,
+        addressLabel: customerAddress,
+      };
+
+      if (!skipConfirm) {
+        setConfirmPayload(confirmData);
+        setIsConfirmOpen(true);
+        return;
+      }
+
+      let savedNotice = "";
+      if (!useSavedAddress && userId) {
+        const formattedAddress = buildAddressLabel(trimmedAddress);
+        try {
+          if (savedAddresses.length >= 5) {
+            setErrorMessage("You can save up to 5 addresses only.");
+            return;
+          }
+
+          const newEntry: SavedAddressEntry = {
+            id: `addr-${Date.now()}`,
+            label: `Address ${savedAddresses.length + 1}`,
+            fields: trimmedAddress,
+            coordinates: selectedCoordinates,
+          };
+          const nextEntries = [...savedAddresses, newEntry];
+
+          await setDoc(
+            doc(db, "users", userId),
+            {
+              addresses: nextEntries.map((entry) => ({
+                id: entry.id,
+                label: entry.label,
+                fields: {
+                  ...entry.fields,
+                  ...(entry.coordinates ?? {}),
+                },
+              })),
+              primaryAddressId: newEntry.id,
+              address: formattedAddress,
+              addressFields: {
+                ...trimmedAddress,
+                ...(selectedCoordinates ?? {}),
+              },
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+          setSavedAddresses(nextEntries);
+          setSelectedSavedAddressId(newEntry.id);
+          setSavedAddress(formattedAddress);
+          setSavedCoordinates(selectedCoordinates);
+          savedNotice = " New address saved to your account.";
+        } catch {
+          setErrorMessage("Booking is ready, but we could not save your address. Please try again.");
+          return;
+        }
+      }
 
       const orderPayload = {
         customerUid: userId,
@@ -1316,6 +1350,8 @@ export default function BookServiceScreen() {
       setCityMunicipality("");
       setProvince("");
       setZipCode("");
+      setIsConfirmOpen(false);
+      setConfirmPayload(null);
       router.replace("/(tabs)/transactions");
     } catch {
       setErrorMessage("Unable to place booking right now. Please try again.");
@@ -2023,6 +2059,61 @@ export default function BookServiceScreen() {
         </View>
       </KeyboardAvoidingView>
 
+      <Modal transparent visible={isConfirmOpen && !!confirmPayload} animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Confirm Booking</Text>
+
+            {confirmPayload && (
+              <View>
+                <Text style={styles.confirmRowTitle}>Shop</Text>
+                <Text style={styles.confirmRowValue}>{confirmPayload.shopName}</Text>
+
+                <Text style={styles.confirmRowTitle}>Service Details</Text>
+                <Text style={styles.confirmRowValue}>
+                  {confirmPayload.serviceType} · {confirmPayload.loadCategory}
+                </Text>
+                <Text style={styles.confirmRowValue}>
+                  {confirmPayload.selectedServices.join(" + ")}
+                </Text>
+
+                <Text style={styles.confirmRowTitle}>Schedule</Text>
+                <Text style={styles.confirmRowValue}>
+                  Pickup: {confirmPayload.pickupDate} ({confirmPayload.pickupWindow})
+                </Text>
+                <Text style={styles.confirmRowValue}>
+                  Delivery: {confirmPayload.deliveryDate}
+                </Text>
+
+                <Text style={styles.confirmRowTitle}>Pricing</Text>
+                <Text style={styles.confirmRowValue}>{confirmPayload.priceLabel}</Text>
+
+                <Text style={styles.confirmRowTitle}>Address</Text>
+                <Text style={styles.confirmRowValue}>{confirmPayload.addressLabel}</Text>
+              </View>
+            )}
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={styles.confirmSecondary}
+                onPress={() => {
+                  setIsConfirmOpen(false);
+                  setConfirmPayload(null);
+                }}
+              >
+                <Text style={styles.confirmSecondaryText}>Go Back</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.confirmPrimary}
+                onPress={() => void handleSubmit(true)}
+              >
+                <Text style={styles.confirmPrimaryText}>Confirm Booking</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal transparent visible={dropdownType !== null} animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
@@ -2711,6 +2802,52 @@ const styles = StyleSheet.create({
   },
   modalCloseText: {
     fontSize: 14,
+    fontWeight: "800",
+    color: "#111827",
+  },
+  confirmRowTitle: {
+    marginTop: 10,
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  confirmRowValue: {
+    marginTop: 4,
+    fontSize: 13,
+    color: "#334155",
+    lineHeight: 18,
+    fontWeight: "600",
+  },
+  confirmActions: {
+    marginTop: 16,
+    flexDirection: "row",
+    gap: 10,
+  },
+  confirmSecondary: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+  },
+  confirmSecondaryText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#475569",
+  },
+  confirmPrimary: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 12,
+    backgroundColor: "#F4C430",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  confirmPrimaryText: {
+    fontSize: 13,
     fontWeight: "800",
     color: "#111827",
   },
