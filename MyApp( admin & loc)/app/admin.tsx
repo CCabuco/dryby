@@ -103,6 +103,7 @@ export default function AdminScreen() {
   const [currentUser, setCurrentUser] = useState<User | null>(auth.currentUser);
   const [isCheckingAccess, setIsCheckingAccess] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [currentRole, setCurrentRole] = useState("");
   const [accessError, setAccessError] = useState("");
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
 
@@ -120,6 +121,8 @@ export default function AdminScreen() {
   const [announcementBody, setAnnouncementBody] = useState("");
   const [announcementMessage, setAnnouncementMessage] = useState("");
   const [isPublishingAnnouncement, setIsPublishingAnnouncement] = useState(false);
+  const [roleMessage, setRoleMessage] = useState("");
+  const [updatingUserId, setUpdatingUserId] = useState("");
 
   const webInputStyle =
     Platform.OS === "web"
@@ -146,6 +149,7 @@ export default function AdminScreen() {
       if (!currentUser) {
         if (isMounted) {
           setIsAdmin(false);
+          setCurrentRole("");
           setAccessError("");
           setIsCheckingAccess(false);
         }
@@ -167,16 +171,19 @@ export default function AdminScreen() {
           return;
         }
 
-        if (role === "admin") {
+        if (role === "admin" || role === "super-admin") {
           setIsAdmin(true);
+          setCurrentRole(role);
           setAccessError("");
         } else {
           setIsAdmin(false);
+          setCurrentRole(role);
           setAccessError("This account is not marked as an admin in Firestore.");
         }
       } catch {
         if (isMounted) {
           setIsAdmin(false);
+          setCurrentRole("");
           setAccessError("Unable to verify admin access right now.");
         }
       } finally {
@@ -300,6 +307,8 @@ export default function AdminScreen() {
     };
   }, [isAdmin]);
 
+  const isSuperAdmin = currentRole === "super-admin";
+
   const stats = useMemo(
     () => [
       { label: "Users", value: users.length.toString() },
@@ -386,6 +395,31 @@ export default function AdminScreen() {
     }
   };
 
+  const handleUserRoleUpdate = async (user: AdminUser, nextRole: string) => {
+    if (!isSuperAdmin || !currentUser || user.id === currentUser.uid) {
+      return;
+    }
+
+    setUpdatingUserId(user.id);
+    setRoleMessage("");
+
+    try {
+      await updateDoc(doc(db, "users", user.id), {
+        role: nextRole,
+        updatedAt: serverTimestamp(),
+      });
+      setRoleMessage(
+        nextRole === "admin"
+          ? `${getUserDisplayName(user)} is now an admin.`
+          : `${getUserDisplayName(user)} was changed back to a user.`
+      );
+    } catch {
+      setRoleMessage("Unable to update this user's role right now.");
+    } finally {
+      setUpdatingUserId("");
+    }
+  };
+
   if (Platform.OS !== "web") {
     return (
       <LinearGradient colors={["#0C3B61", "#165D8C"]} style={styles.container}>
@@ -459,7 +493,8 @@ export default function AdminScreen() {
               <View style={styles.authCard}>
                 <Text style={styles.sectionHeading}>Admin Sign In</Text>
                 <Text style={styles.sectionText}>
-                  Sign in with an account whose Firestore user document contains `role: "admin"`.
+                  Sign in with an account whose Firestore user document contains role admin or
+                  super-admin.
                 </Text>
 
                 <View style={styles.inputWrap}>
@@ -509,8 +544,7 @@ export default function AdminScreen() {
                   {accessError || "This account is not allowed to open the admin dashboard."}
                 </Text>
                 <Text style={styles.helperText}>
-                  Set `role` to `admin` in the matching Firestore `users/{'{uid}'}` document, then sign
-                  in again.
+                  Set `role` to `admin` or `super-admin` in the matching Firestore `users/{'{uid}'}` document, then sign in again.
                 </Text>
               </View>
             ) : (
@@ -533,11 +567,12 @@ export default function AdminScreen() {
                     </Text>
                     <View style={styles.overviewList}>
                       <Text style={styles.overviewItem}>Signed in as: {currentUser.email}</Text>
+                      <Text style={styles.overviewItem}>Access level: {currentRole || "unknown"}</Text>
                       <Text style={styles.overviewItem}>
                         Active shops: {shops.filter((shop) => shop.isActive).length}
                       </Text>
                       <Text style={styles.overviewItem}>
-                        Admin users: {users.filter((user) => user.role === "admin").length}
+                        Admin users: {users.filter((user) => user.role === "admin" || user.role === "super-admin").length}
                       </Text>
                     </View>
                   </View>
@@ -574,13 +609,67 @@ export default function AdminScreen() {
                 {activeTab === "users" ? (
                   <View style={styles.panel}>
                     <Text style={styles.sectionHeading}>Users</Text>
+                    <Text style={styles.sectionText}>
+                      {isSuperAdmin
+                        ? "You can promote users to admin or revert admins back to regular users."
+                        : "Only super-admin accounts can change user roles."}
+                    </Text>
+                    {!!roleMessage && (
+                      <Text
+                        style={[
+                          styles.helperText,
+                          roleMessage.includes("Unable") ? styles.errorText : styles.successText,
+                        ]}
+                      >
+                        {roleMessage}
+                      </Text>
+                    )}
                     {users.map((user) => (
                       <View key={user.id} style={styles.listCard}>
-                        <Text style={styles.listCardTitle}>{getUserDisplayName(user)}</Text>
-                        <Text style={styles.listCardMeta}>{user.email || "No email"}</Text>
-                        <Text style={styles.listCardMeta}>
-                          {user.mobileNumber || "No mobile number"} | role: {user.role}
-                        </Text>
+                        <View style={styles.listCardHeader}>
+                          <View style={styles.listCardTextBlock}>
+                            <Text style={styles.listCardTitle}>{getUserDisplayName(user)}</Text>
+                            <Text style={styles.listCardMeta}>{user.email || "No email"}</Text>
+                            <Text style={styles.listCardMeta}>
+                              {user.mobileNumber || "No mobile number"} | role: {user.role}
+                            </Text>
+                          </View>
+                          {isSuperAdmin && user.id !== currentUser?.uid ? (
+                            user.role === "admin" ? (
+                              <TouchableOpacity
+                                style={[
+                                  styles.statusButton,
+                                  styles.statusButtonDanger,
+                                  updatingUserId === user.id && styles.disabledButton,
+                                ]}
+                                onPress={() => void handleUserRoleUpdate(user, "user")}
+                                disabled={updatingUserId === user.id}
+                              >
+                                <Text style={styles.statusButtonText}>
+                                  {updatingUserId === user.id ? "Saving..." : "Remove Admin"}
+                                </Text>
+                              </TouchableOpacity>
+                            ) : user.role === "super-admin" ? (
+                              <View style={styles.roleBadge}>
+                                <Text style={styles.roleBadgeText}>Super Admin</Text>
+                              </View>
+                            ) : (
+                              <TouchableOpacity
+                                style={[
+                                  styles.statusButton,
+                                  styles.statusButtonSuccess,
+                                  updatingUserId === user.id && styles.disabledButton,
+                                ]}
+                                onPress={() => void handleUserRoleUpdate(user, "admin")}
+                                disabled={updatingUserId === user.id}
+                              >
+                                <Text style={styles.statusButtonText}>
+                                  {updatingUserId === user.id ? "Saving..." : "Make Admin"}
+                                </Text>
+                              </TouchableOpacity>
+                            )
+                          ) : null}
+                        </View>
                       </View>
                     ))}
                   </View>
@@ -957,6 +1046,19 @@ const styles = StyleSheet.create({
   },
   announcementList: {
     marginTop: 10,
+  },
+  roleBadge: {
+    borderRadius: 16,
+    backgroundColor: "#083B66",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    minWidth: 110,
+    alignItems: "center",
+  },
+  roleBadgeText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "800",
   },
   mobileOnlyCard: {
     borderRadius: 28,

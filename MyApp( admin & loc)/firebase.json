@@ -2,9 +2,18 @@
   "firestore": {
     "rules": "firestore.rules"
   },
-  "hosting": {
-    "public": "dist",
-    "ignore": ["firebase.json", "**/.*"],
-    "cleanUrls": true
-  }
+  "hosting": [
+    {
+      "target": "dryby-fi",
+      "public": "dist",
+      "ignore": ["firebase.json", "**/.*"],
+      "cleanUrls": true
+    },
+    {
+      "target": "admin",
+      "public": "admin-site",
+      "ignore": ["firebase.json", "**/.*"],
+      "cleanUrls": true
+    }
+  ]
 }

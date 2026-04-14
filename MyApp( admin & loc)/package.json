@@ -5,12 +5,14 @@
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
+    "admin:bootstrap": "node ./scripts/bootstrap-admin.mjs",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "web:build": "expo export --platform web",
     "hosting:deploy": "firebase deploy --only hosting",
-    "hosting:deploy:web": "npm run web:build && firebase deploy --only hosting",
+    "hosting:deploy:web": "npm run web:build && firebase deploy --only hosting:dryby-fi",
+    "hosting:deploy:admin": "firebase deploy --only hosting:admin",
     "lint": "expo lint"
   },
   "dependencies": {
