@@ -120,6 +120,7 @@ export default function AdminScreen() {
   const [announcementBody, setAnnouncementBody] = useState("");
   const [announcementMessage, setAnnouncementMessage] = useState("");
   const [isPublishingAnnouncement, setIsPublishingAnnouncement] = useState(false);
+  const showAdminSidebar = !!currentUser && isAdmin;
 
   const webInputStyle =
     Platform.OS === "web"
@@ -408,46 +409,56 @@ export default function AdminScreen() {
     <LinearGradient colors={["#E8F4FF", "#F8FBFF"]} style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.page}>
-          <View style={styles.sidebar}>
-            <Text style={styles.sidebarBrand}>DryBy Admin</Text>
-            <Text style={styles.sidebarCaption}>Connected to the same Firebase project as the app.</Text>
+          {showAdminSidebar ? (
+            <View style={styles.sidebar}>
+              <Text style={styles.sidebarBrand}>DryBy Admin</Text>
+              <Text style={styles.sidebarCaption}>
+                Connected to the same Firebase project as the app.
+              </Text>
 
-            {TABS.map((tab) => (
-              <Pressable
-                key={tab.id}
-                onPress={() => setActiveTab(tab.id)}
-                style={[styles.sidebarTab, activeTab === tab.id && styles.sidebarTabActive]}
-              >
-                <Ionicons
-                  name={tab.icon}
-                  size={18}
-                  color={activeTab === tab.id ? "#083B66" : "#4B6580"}
-                />
-                <Text
-                  style={[
-                    styles.sidebarTabText,
-                    activeTab === tab.id && styles.sidebarTabTextActive,
-                  ]}
+              {TABS.map((tab) => (
+                <Pressable
+                  key={tab.id}
+                  onPress={() => setActiveTab(tab.id)}
+                  style={[styles.sidebarTab, activeTab === tab.id && styles.sidebarTabActive]}
                 >
-                  {tab.label}
-                </Text>
-              </Pressable>
-            ))}
+                  <Ionicons
+                    name={tab.icon}
+                    size={18}
+                    color={activeTab === tab.id ? "#083B66" : "#4B6580"}
+                  />
+                  <Text
+                    style={[
+                      styles.sidebarTabText,
+                      activeTab === tab.id && styles.sidebarTabTextActive,
+                    ]}
+                  >
+                    {tab.label}
+                  </Text>
+                </Pressable>
+              ))}
 
-            <View style={styles.sidebarFooter}>
-              <TouchableOpacity
-                style={styles.signOutButton}
-                onPress={async () => {
-                  await signOut(auth);
-                  setActiveTab("overview");
-                }}
-              >
-                <Text style={styles.signOutButtonText}>Sign out</Text>
-              </TouchableOpacity>
+              <View style={styles.sidebarFooter}>
+                <TouchableOpacity
+                  style={styles.signOutButton}
+                  onPress={async () => {
+                    await signOut(auth);
+                    setActiveTab("overview");
+                  }}
+                >
+                  <Text style={styles.signOutButtonText}>Sign out</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
+          ) : null}
 
-          <ScrollView style={styles.mainPane} contentContainerStyle={styles.mainContent}>
+          <ScrollView
+            style={styles.mainPane}
+            contentContainerStyle={[
+              styles.mainContent,
+              !showAdminSidebar && styles.mainContentCentered,
+            ]}
+          >
             <View style={styles.heroCard}>
               <Text style={styles.heroTitle}>Admin Control Center</Text>
               <Text style={styles.heroText}>
@@ -754,6 +765,10 @@ const styles = StyleSheet.create({
   },
   mainContent: {
     paddingBottom: 36,
+  },
+  mainContentCentered: {
+    flexGrow: 1,
+    alignItems: "stretch",
   },
   heroCard: {
     borderRadius: 30,
