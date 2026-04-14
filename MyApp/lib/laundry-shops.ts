@@ -11,6 +11,8 @@ export type AddressFields = {
   province: string;
   zipCode: string;
   country: string;
+  latitude: number | null;
+  longitude: number | null;
 };
 
 export type PickupWindow = {
@@ -102,6 +104,8 @@ export const EMPTY_ADDRESS_FIELDS: AddressFields = {
   province: "",
   zipCode: "",
   country: "Philippines",
+  latitude: null,
+  longitude: null,
 };
 
 export const DEFAULT_LOAD_CONFIGS: Record<LoadCategoryKey, LoadConfig> = {
@@ -328,6 +332,8 @@ function normalizeStringArray(value: unknown): string[] {
 
 function normalizeAddressFields(value: unknown): AddressFields {
   const source = toRecord(value);
+  const latitude = safeNumber(source.latitude, NaN);
+  const longitude = safeNumber(source.longitude, NaN);
   return {
     houseUnit: safeString(source.houseUnit),
     streetName: safeString(source.streetName),
@@ -336,6 +342,8 @@ function normalizeAddressFields(value: unknown): AddressFields {
     province: safeString(source.province),
     zipCode: safeString(source.zipCode),
     country: safeString(source.country, "Philippines") || "Philippines",
+    latitude: Number.isFinite(latitude) ? latitude : null,
+    longitude: Number.isFinite(longitude) ? longitude : null,
   };
 }
 

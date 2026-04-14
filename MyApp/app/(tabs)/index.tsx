@@ -206,6 +206,23 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
+          {!isLoggedIn ? (
+            <View style={styles.loginPromptCard}>
+              <View style={styles.loginPromptTextWrap}>
+                <Text style={styles.loginPromptTitle}>Login to access other features</Text>
+                <Text style={styles.loginPromptSubtitle}>
+                  Sign in to book services, manage orders, and save your details.
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.loginPromptButton}
+                onPress={() => router.push("/login")}
+              >
+                <Text style={styles.loginPromptButtonText}>Log in</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           {isLoggedIn && !!missingContactMessage ? (
             <View style={styles.setupCard}>
               <Text style={styles.setupText}>{missingContactMessage}</Text>
@@ -387,6 +404,45 @@ const styles = StyleSheet.create({
   },
   setupBtnText: {
     color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  loginPromptCard: {
+    marginHorizontal: 28,
+    marginBottom: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.35)",
+    backgroundColor: "rgba(255,255,255,0.18)",
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  loginPromptTextWrap: {
+    flex: 1,
+  },
+  loginPromptTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+  loginPromptSubtitle: {
+    marginTop: 4,
+    fontSize: 11,
+    lineHeight: 16,
+    color: "rgba(255,255,255,0.85)",
+  },
+  loginPromptButton: {
+    backgroundColor: "#F4C430",
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  loginPromptButtonText: {
+    color: "#111827",
     fontSize: 12,
     fontWeight: "800",
   },

@@ -17,6 +17,7 @@ import {
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Image,
+  Modal,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -25,6 +26,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { LocationPickerModal } from "../../components/location-picker-modal";
 import { isGuestMode, setGuestMode } from "../../lib/app-state";
 import { auth, db } from "../../lib/firebase";
 import {
@@ -43,6 +45,12 @@ type UserProfileDoc = {
   mobileNumber?: string;
   address?: string;
   addressFields?: Partial<AddressFields>;
+  addresses?: Array<{
+    id?: string;
+    label?: string;
+    fields?: Partial<AddressFields>;
+  }>;
+  primaryAddressId?: string;
   nameHistory?: Array<{ name?: string; changedAt?: number }>;
   usernameLastChangedAt?:
     | number
@@ -62,7 +70,17 @@ type AddressFields = {
   province: string;
   zipCode: string;
   country: string;
+  latitude: number | null;
+  longitude: number | null;
 };
+
+type AddressEntry = {
+  id: string;
+  label: string;
+  fields: AddressFields;
+};
+
+type DropdownType = "province" | "city";
 
 type NameHistoryEntry = {
   name: string;
@@ -70,6 +88,142 @@ type NameHistoryEntry = {
 };
 
 const USERNAME_CHANGE_COOLDOWN_MS = 90 * 24 * 60 * 60 * 1000;
+
+const PH_LOCATIONS = [
+  {
+    province: "Laguna",
+    municipalities: [
+      "Alaminos",
+      "Bay",
+      "Binan City",
+      "Cabuyao City",
+      "Calamba City",
+      "Calauan",
+      "Cavinti",
+      "Famy",
+      "Kalayaan",
+      "Liliw",
+      "Los Banos",
+      "Luisiana",
+      "Lumban",
+      "Mabitac",
+      "Magdalena",
+      "Majayjay",
+      "Nagcarlan",
+      "Paete",
+      "Pagsanjan",
+      "Pakil",
+      "Pangil",
+      "Pila",
+      "Rizal",
+      "San Pablo City",
+      "San Pedro City",
+      "Santa Cruz",
+      "Santa Maria",
+      "Santa Rosa City",
+      "Siniloan",
+      "Victoria",
+    ],
+  },
+  {
+    province: "Bulacan",
+    municipalities: [
+      "Angat",
+      "Balagtas",
+      "Baliwag",
+      "Bocaue",
+      "Bulakan",
+      "Bustos",
+      "Calumpit",
+      "Dona Remedios Trinidad",
+      "Guiguinto",
+      "Hagonoy",
+      "Malolos City",
+      "Marilao",
+      "Meycauayan City",
+      "Norzagaray",
+      "Obando",
+      "Pandi",
+      "Paombong",
+      "Plaridel",
+      "Pulilan",
+      "San Ildefonso",
+      "San Jose del Monte City",
+      "San Miguel",
+      "San Rafael",
+      "Santa Maria",
+    ],
+  },
+  {
+    province: "Cavite",
+    municipalities: [
+      "Alfonso",
+      "Amadeo",
+      "Bacoor City",
+      "Carmona",
+      "Cavite City",
+      "Dasmarinas City",
+      "General Emilio Aguinaldo",
+      "General Mariano Alvarez",
+      "General Trias City",
+      "Imus City",
+      "Indang",
+      "Kawit",
+      "Magallanes",
+      "Maragondon",
+      "Mendez",
+      "Naic",
+      "Noveleta",
+      "Rosario",
+      "Silang",
+      "Tagaytay City",
+      "Tanza",
+      "Ternate",
+      "Trece Martires City",
+    ],
+  },
+  {
+    province: "Rizal",
+    municipalities: [
+      "Angono",
+      "Antipolo City",
+      "Baras",
+      "Binangonan",
+      "Cainta",
+      "Cardona",
+      "Jalajala",
+      "Morong",
+      "Pililla",
+      "Rodriguez",
+      "San Mateo",
+      "Tanay",
+      "Taytay",
+      "Teresa",
+    ],
+  },
+  {
+    province: "Metro Manila",
+    municipalities: [
+      "Caloocan",
+      "Las Pinas",
+      "Makati",
+      "Malabon",
+      "Mandaluyong",
+      "Manila",
+      "Marikina",
+      "Muntinlupa",
+      "Navotas",
+      "Paranaque",
+      "Pasay",
+      "Pasig",
+      "Pateros",
+      "Quezon City",
+      "San Juan",
+      "Taguig",
+      "Valenzuela",
+    ],
+  },
+];
 
 const EMPTY_ADDRESS_FIELDS: AddressFields = {
   houseUnit: "",
@@ -79,6 +233,8 @@ const EMPTY_ADDRESS_FIELDS: AddressFields = {
   province: "",
   zipCode: "",
   country: "Philippines",
+  latitude: null,
+  longitude: null,
 };
 
 function extractPhoneDigits(value: string): string {
@@ -120,6 +276,24 @@ function toAddressString(fields: AddressFields): string {
     .join(", ");
 }
 
+function normalizeAddressEntry(
+  entry: UserProfileDoc["addresses"] extends Array<infer T> ? T : never
+): AddressEntry | null {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const id =
+    typeof (entry as any).id === "string" && (entry as any).id.trim()
+      ? (entry as any).id.trim()
+      : `addr-${Date.now()}-${Math.random()}`;
+  const label =
+    typeof (entry as any).label === "string" && (entry as any).label.trim()
+      ? (entry as any).label.trim()
+      : "Address";
+  const fields = hydrateAddressFields({ addressFields: (entry as any).fields ?? {} });
+  return { id, label, fields };
+}
+
 function hydrateAddressFields(data: UserProfileDoc): AddressFields {
   const fromFields = data.addressFields ?? {};
   const base: AddressFields = {
@@ -130,6 +304,14 @@ function hydrateAddressFields(data: UserProfileDoc): AddressFields {
     province: (fromFields.province ?? "").trim(),
     zipCode: (fromFields.zipCode ?? "").trim(),
     country: (fromFields.country ?? "Philippines").trim() || "Philippines",
+    latitude:
+      typeof fromFields.latitude === "number" && Number.isFinite(fromFields.latitude)
+        ? fromFields.latitude
+        : null,
+    longitude:
+      typeof fromFields.longitude === "number" && Number.isFinite(fromFields.longitude)
+        ? fromFields.longitude
+        : null,
   };
 
   if (base.houseUnit || base.streetName || base.barangay || base.cityMunicipality || base.province || base.zipCode) {
@@ -151,6 +333,8 @@ function hydrateAddressFields(data: UserProfileDoc): AddressFields {
       province: parts[4] ?? "",
       zipCode: parts[5] ?? "",
       country: parts[6] ?? "Philippines",
+      latitude: null,
+      longitude: null,
     };
   }
 
@@ -213,13 +397,18 @@ export default function AccountScreen() {
   const [usernameLastChangedAt, setUsernameLastChangedAt] = useState<number | null>(null);
   const [isPhoneEditorOpen, setIsPhoneEditorOpen] = useState(false);
   const [isAddressEditorOpen, setIsAddressEditorOpen] = useState(false);
+  const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [mobileNumber, setMobileNumber] = useState("");
   const [savedMobileNumber, setSavedMobileNumber] = useState("");
+  const [addressEntries, setAddressEntries] = useState<AddressEntry[]>([]);
+  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
+  const [addressLabel, setAddressLabel] = useState("");
   const [addressFields, setAddressFields] = useState<AddressFields>(EMPTY_ADDRESS_FIELDS);
-  const [savedAddressFields, setSavedAddressFields] =
-    useState<AddressFields>(EMPTY_ADDRESS_FIELDS);
+  const [dropdownType, setDropdownType] = useState<DropdownType | null>(null);
+  const [addressStep, setAddressStep] = useState(1);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
@@ -267,8 +456,11 @@ export default function AccountScreen() {
       setEmail("");
       setMobileNumber("");
       setSavedMobileNumber("");
+      setAddressEntries([]);
+      setSelectedAddressId(null);
+      setEditingAddressId(null);
+      setAddressLabel("");
       setAddressFields({ ...EMPTY_ADDRESS_FIELDS });
-      setSavedAddressFields({ ...EMPTY_ADDRESS_FIELDS });
       setIsPhoneEditorOpen(false);
       setIsAddressEditorOpen(false);
       setIsFetching(false);
@@ -292,6 +484,8 @@ export default function AccountScreen() {
         let nextEmail = fallbackEmail;
         let nextPhone = "";
         let nextAddress = { ...EMPTY_ADDRESS_FIELDS };
+        let nextEntries: AddressEntry[] = [];
+        let nextSelectedId: string | null = null;
         let nextNameHistory: NameHistoryEntry[] = [];
         let nextUsernameLastChangedAt: number | null = null;
 
@@ -303,7 +497,34 @@ export default function AccountScreen() {
             fallbackName;
           nextEmail = data.email?.trim() || fallbackEmail;
           nextPhone = extractPhoneDigits(data.mobileNumber ?? "");
-          nextAddress = hydrateAddressFields(data);
+          if (data.addresses && Array.isArray(data.addresses)) {
+            nextEntries = data.addresses
+              .map((entry) => normalizeAddressEntry(entry as any))
+              .filter((entry): entry is AddressEntry => !!entry);
+          }
+
+          if (!nextEntries.length && (data.addressFields || data.address)) {
+            nextAddress = hydrateAddressFields(data);
+            nextEntries = [
+              {
+                id: "primary",
+                label: "Home",
+                fields: nextAddress,
+              },
+            ];
+          }
+
+          nextSelectedId =
+            (typeof data.primaryAddressId === "string" && data.primaryAddressId) ||
+            (nextEntries[0]?.id ?? null);
+
+          if (nextSelectedId) {
+            const selected = nextEntries.find((entry) => entry.id === nextSelectedId);
+            if (selected) {
+              nextAddress = selected.fields;
+              setAddressLabel(selected.label);
+            }
+          }
           nextUsernameLastChangedAt = parseTimestampMillis(data.usernameLastChangedAt);
           nextNameHistory = Array.isArray(data.nameHistory)
             ? data.nameHistory
@@ -330,8 +551,9 @@ export default function AccountScreen() {
         setEmail(nextEmail);
         setMobileNumber(nextPhone);
         setSavedMobileNumber(nextPhone);
+        setAddressEntries(nextEntries);
+        setSelectedAddressId(nextSelectedId);
         setAddressFields({ ...nextAddress });
-        setSavedAddressFields({ ...nextAddress });
         setIsNameEditorOpen(false);
         setIsPhoneEditorOpen(false);
         setIsAddressEditorOpen(false);
@@ -354,6 +576,10 @@ export default function AccountScreen() {
   }, [usernameLastChangedAt]);
   const usernameCooldownDaysLeft = Math.ceil(usernameCooldownMsLeft / (24 * 60 * 60 * 1000));
   const canChangeUsername = usernameCooldownMsLeft === 0;
+  const locationSummary =
+    typeof addressFields.latitude === "number" && typeof addressFields.longitude === "number"
+      ? `${addressFields.latitude.toFixed(6)}, ${addressFields.longitude.toFixed(6)}`
+      : "No map pin saved yet.";
 
   const syncNameChangeToPastRecords = async (
     userId: string,
@@ -580,6 +806,14 @@ export default function AccountScreen() {
       province: sanitizeInput(addressFields.province).trim(),
       zipCode: addressFields.zipCode.replace(/\D/g, "").slice(0, 4),
       country: sanitizeInput(addressFields.country).trim() || "Philippines",
+      latitude:
+        typeof addressFields.latitude === "number" && Number.isFinite(addressFields.latitude)
+          ? addressFields.latitude
+          : null,
+      longitude:
+        typeof addressFields.longitude === "number" && Number.isFinite(addressFields.longitude)
+          ? addressFields.longitude
+          : null,
     };
     const normalizedAddress = toAddressString(normalizedAddressFields);
     const normalizedPhone = normalizePHPhone(mobileNumber);
@@ -643,27 +877,51 @@ export default function AccountScreen() {
       }
 
       if (shouldSaveAddress) {
-        payload.address = normalizedAddress;
-        payload.addressFields = normalizedAddressFields;
+        if (!addressLabel.trim()) {
+          setErrorMessage("Please add a label for this address.");
+          return;
+        }
+
+        const nextEntries = [...addressEntries];
+        const nextId = editingAddressId ?? `addr-${Date.now()}`;
+        const nextEntry: AddressEntry = {
+          id: nextId,
+          label: addressLabel.trim(),
+          fields: normalizedAddressFields,
+        };
+        const existingIndex = nextEntries.findIndex((entry) => entry.id === nextId);
+        if (existingIndex >= 0) {
+          nextEntries[existingIndex] = nextEntry;
+        } else {
+          if (nextEntries.length >= 5) {
+            setErrorMessage("You can save up to 5 addresses only.");
+            return;
+          }
+          nextEntries.push(nextEntry);
+        }
+
+        const nextPrimaryId = selectedAddressId ?? nextId;
+        const primaryEntry =
+          nextEntries.find((entry) => entry.id === nextPrimaryId) ?? nextEntry;
+
+        payload.addresses = nextEntries;
+        payload.primaryAddressId = nextPrimaryId;
+        payload.address = toAddressString(primaryEntry.fields);
+        payload.addressFields = primaryEntry.fields;
+
+        setAddressEntries(nextEntries);
+        setSelectedAddressId(nextPrimaryId);
+        setEditingAddressId(null);
+        setIsAddressEditorOpen(false);
       }
 
-      await setDoc(
-        doc(db, "users", user.uid),
-        payload,
-        { merge: true }
-      );
+      await setDoc(doc(db, "users", user.uid), payload, { merge: true });
 
       if (shouldSavePhone) {
         const nextPhone = extractPhoneDigits(normalizedPhone);
         setMobileNumber(nextPhone);
         setSavedMobileNumber(nextPhone);
         setIsPhoneEditorOpen(false);
-      }
-
-      if (shouldSaveAddress) {
-        setAddressFields({ ...normalizedAddressFields });
-        setSavedAddressFields({ ...normalizedAddressFields });
-        setIsAddressEditorOpen(false);
       }
 
       const savedParts: string[] = [];
@@ -693,11 +951,24 @@ export default function AccountScreen() {
 
   const canEdit = !!user && !isFetching && !isSaving && !isSavingName;
   const hasSavedPhone = savedMobileNumber.trim().length > 0;
-  const hasSavedAddress = hasStoredAddress(savedAddressFields);
+  const hasSavedAddress = addressEntries.length > 0;
   const showPhoneField = hasSavedPhone || isPhoneEditorOpen;
   const showAddressFields = hasSavedAddress || isAddressEditorOpen;
   const isAnyEditorOpen = isPhoneEditorOpen || isAddressEditorOpen;
   const isGuestOnlyView = guestMode && !user;
+  const selectedProvinceData = useMemo(
+    () => PH_LOCATIONS.find((item) => item.province === addressFields.province) ?? null,
+    [addressFields.province]
+  );
+  const dropdownOptions = useMemo(() => {
+    if (dropdownType === "province") {
+      return PH_LOCATIONS.map((item) => item.province);
+    }
+    if (dropdownType === "city") {
+      return selectedProvinceData ? selectedProvinceData.municipalities : [];
+    }
+    return [];
+  }, [dropdownType, selectedProvinceData]);
 
   const handleAddressFieldChange = (key: keyof AddressFields, value: string) => {
     setAddressFields((previous) => ({
@@ -725,21 +996,127 @@ export default function AccountScreen() {
     setSuccessMessage("");
   };
 
-  const handleAddressAction = () => {
+  const startAddAddress = () => {
     if (!canEdit) {
       return;
     }
-
-    if (isAddressEditorOpen) {
-      setAddressFields({ ...savedAddressFields });
-      setIsAddressEditorOpen(false);
-    } else {
-      setAddressFields(hasSavedAddress ? { ...savedAddressFields } : { ...EMPTY_ADDRESS_FIELDS });
-      setIsAddressEditorOpen(true);
+    if (addressEntries.length >= 5) {
+      setErrorMessage("You can save up to 5 addresses only.");
+      setSuccessMessage("");
+      return;
     }
-
+    setEditingAddressId(null);
+    setAddressLabel("");
+    setAddressFields({ ...EMPTY_ADDRESS_FIELDS });
+    setAddressStep(1);
+    setIsAddressEditorOpen(true);
     setErrorMessage("");
     setSuccessMessage("");
+  };
+
+  const startEditAddress = (entry: AddressEntry) => {
+    if (!canEdit) {
+      return;
+    }
+    setEditingAddressId(entry.id);
+    setAddressLabel(entry.label);
+    setAddressFields({ ...entry.fields });
+    setAddressStep(1);
+    setIsAddressEditorOpen(true);
+    setErrorMessage("");
+    setSuccessMessage("");
+  };
+
+  const cancelAddressEditing = () => {
+    setEditingAddressId(null);
+    setAddressStep(1);
+    setIsAddressEditorOpen(false);
+    setErrorMessage("");
+    setSuccessMessage("");
+  };
+
+  const handleSelectAddress = async (entry: AddressEntry) => {
+    setSelectedAddressId(entry.id);
+    setAddressFields({ ...entry.fields });
+    setAddressLabel(entry.label);
+
+    if (!user) {
+      return;
+    }
+
+    try {
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          primaryAddressId: entry.id,
+          address: toAddressString(entry.fields),
+          addressFields: entry.fields,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch {
+      // Non-blocking: keep selection in UI even if save fails.
+    }
+  };
+
+  const handlePickDropdownValue = (value: string) => {
+    if (!dropdownType) {
+      return;
+    }
+
+    if (dropdownType === "province") {
+      setAddressFields((previous) => ({
+        ...previous,
+        province: value,
+        cityMunicipality: "",
+      }));
+    } else {
+      setAddressFields((previous) => ({
+        ...previous,
+        cityMunicipality: value,
+      }));
+    }
+
+    setDropdownType(null);
+  };
+
+  const totalAddressSteps = 7;
+
+  const canAdvanceAddressStep = () => {
+    if (addressStep === 1) {
+      return !!addressLabel.trim();
+    }
+    if (addressStep === 2) {
+      return !!addressFields.houseUnit.trim();
+    }
+    if (addressStep === 3) {
+      return !!addressFields.streetName.trim();
+    }
+    if (addressStep === 4) {
+      return !!addressFields.barangay.trim();
+    }
+    if (addressStep === 5) {
+      return !!addressFields.province.trim() && !!addressFields.cityMunicipality.trim();
+    }
+    if (addressStep === 6) {
+      return /^\d{4}$/.test(addressFields.zipCode.trim());
+    }
+    return true;
+  };
+
+  const goToNextAddressStep = () => {
+    if (!canAdvanceAddressStep()) {
+      setErrorMessage("Please complete this field before continuing.");
+      return;
+    }
+    setErrorMessage("");
+    setAddressStep((previous) => Math.min(previous + 1, totalAddressSteps));
+  };
+
+  const goToPreviousAddressStep = () => {
+    setErrorMessage("");
+    setAddressStep((previous) => Math.max(previous - 1, 1));
   };
 
   return (
@@ -796,27 +1173,30 @@ export default function AccountScreen() {
             <View style={styles.infoCard}>
               <View style={styles.infoRow}>
                 <Text style={styles.label}>Name:</Text>
-                <Text style={styles.value}>{fullName || "Not available"}</Text>
-              </View>
-              {user ? (
-                <>
-                  <View style={styles.nameActionRow}>
+                <View style={styles.nameValueRow}>
+                  <Text style={styles.value}>{fullName || "Not available"}</Text>
+                  {user ? (
                     <TouchableOpacity
-                      style={[styles.smallOutlineBtn, !canEdit && styles.disabledBtn]}
+                      style={[styles.iconButton, !canEdit && styles.disabledBtn]}
                       disabled={!canEdit}
                       onPress={handleNameAction}
                     >
-                      <Text style={styles.smallOutlineBtnText}>
-                        {isNameEditorOpen ? "Cancel" : "Change username"}
-                      </Text>
+                      <Ionicons
+                        name={isNameEditorOpen ? "close-circle-outline" : "create-outline"}
+                        size={18}
+                        color={canEdit ? "#2E95D3" : "#9CA3AF"}
+                      />
                     </TouchableOpacity>
-
-                    {!isNameEditorOpen && !canChangeUsername ? (
-                      <Text style={styles.nameCooldownText}>
-                        Available in {usernameCooldownDaysLeft} day(s)
-                      </Text>
-                    ) : null}
-                  </View>
+                  ) : null}
+                </View>
+              </View>
+              {user ? (
+                <>
+                  {!isNameEditorOpen && !canChangeUsername ? (
+                    <Text style={styles.nameCooldownText}>
+                      Available in {usernameCooldownDaysLeft} day(s)
+                    </Text>
+                  ) : null}
 
                   {isNameEditorOpen ? (
                     <>
@@ -921,104 +1301,258 @@ export default function AccountScreen() {
                   <View style={[styles.contactGroup, styles.contactGroupSpacing]}>
                     <View style={styles.fieldHeaderRow}>
                       <Text style={styles.fieldGroupTitle}>Address</Text>
-                      <TouchableOpacity
-                        style={[styles.smallOutlineBtn, !canEdit && styles.disabledBtn]}
-                        disabled={!canEdit}
-                        onPress={handleAddressAction}
-                      >
-                        <Text style={styles.smallOutlineBtnText}>
-                          {isAddressEditorOpen ? "Cancel" : hasSavedAddress ? "Edit" : "Add"}
-                        </Text>
-                      </TouchableOpacity>
+                      {isAddressEditorOpen ? (
+                        <TouchableOpacity
+                          style={[styles.smallOutlineBtn, !canEdit && styles.disabledBtn]}
+                          disabled={!canEdit}
+                          onPress={cancelAddressEditing}
+                        >
+                          <Text style={styles.smallOutlineBtnText}>Cancel</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={[styles.smallOutlineBtn, !canEdit && styles.disabledBtn]}
+                          disabled={!canEdit}
+                          onPress={startAddAddress}
+                        >
+                          <Text style={styles.smallOutlineBtnText}>Add</Text>
+                        </TouchableOpacity>
+                      )}
                     </View>
 
                     {showAddressFields ? (
                       <>
-                        <Text style={styles.fieldLabel}>House/Unit/Building Number</Text>
-                        <TextInput
-                          style={[styles.addressFieldInput, !isAddressEditorOpen && styles.readOnlyInput]}
-                          placeholder="123, Unit 4B, Sunrise Apartments"
-                          placeholderTextColor="#9AA4B2"
-                          value={addressFields.houseUnit}
-                          editable={isAddressEditorOpen && !isSaving}
-                          onChangeText={(value) => handleAddressFieldChange("houseUnit", value)}
-                        />
+                        {!isAddressEditorOpen ? (
+                          <>
+                            {addressEntries.map((entry) => (
+                              <TouchableOpacity
+                                key={entry.id}
+                                style={[
+                                  styles.addressCard,
+                                  selectedAddressId === entry.id && styles.addressCardActive,
+                                ]}
+                                onPress={() => void handleSelectAddress(entry)}
+                              >
+                                <View style={styles.addressCardHeader}>
+                                  <Text style={styles.addressCardTitle}>{entry.label}</Text>
+                                  <TouchableOpacity
+                                    style={styles.addressEditButton}
+                                    onPress={() => startEditAddress(entry)}
+                                  >
+                                    <Ionicons name="create-outline" size={14} color="#1D4ED8" />
+                                    <Text style={styles.addressEditText}>Edit</Text>
+                                  </TouchableOpacity>
+                                </View>
+                                <Text style={styles.addressCardBody}>
+                                  {toAddressString(entry.fields) || "Address not set"}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                            {addressEntries.length >= 5 ? (
+                              <Text style={styles.helperText}>Maximum of 5 addresses saved.</Text>
+                            ) : null}
+                          </>
+                        ) : null}
 
-                        <Text style={styles.fieldLabel}>Street Name</Text>
-                        <TextInput
-                          style={[styles.addressFieldInput, !isAddressEditorOpen && styles.readOnlyInput]}
-                          placeholder="Rizal Street"
-                          placeholderTextColor="#9AA4B2"
-                          value={addressFields.streetName}
-                          editable={isAddressEditorOpen && !isSaving}
-                          onChangeText={(value) => handleAddressFieldChange("streetName", value)}
-                        />
+                        {isAddressEditorOpen ? (
+                          <>
+                            <Text style={styles.stepPill}>Step {addressStep} of {totalAddressSteps}</Text>
+                            {addressStep === 1 ? (
+                              <>
+                                <Text style={styles.fieldLabel}>Address Label</Text>
+                                <TextInput
+                                  style={styles.addressFieldInput}
+                                  placeholder="Home, Work, etc."
+                                  placeholderTextColor="#9AA4B2"
+                                  value={addressLabel}
+                                  editable={!isSaving}
+                                  onChangeText={(value) =>
+                                    setAddressLabel(value.replace(/[<>]/g, ""))
+                                  }
+                                />
+                              </>
+                            ) : null}
 
-                        <Text style={styles.fieldLabel}>Barangay</Text>
-                        <TextInput
-                          style={[styles.addressFieldInput, !isAddressEditorOpen && styles.readOnlyInput]}
-                          placeholder="Barangay San Roque"
-                          placeholderTextColor="#9AA4B2"
-                          value={addressFields.barangay}
-                          editable={isAddressEditorOpen && !isSaving}
-                          onChangeText={(value) => handleAddressFieldChange("barangay", value)}
-                        />
+                            {addressStep === 2 ? (
+                              <>
+                                <Text style={styles.fieldLabel}>House/Unit/Building Number</Text>
+                                <TextInput
+                                  style={styles.addressFieldInput}
+                                  placeholder="123, Unit 4B, Sunrise Apartments"
+                                  placeholderTextColor="#9AA4B2"
+                                  value={addressFields.houseUnit}
+                                  editable={!isSaving}
+                                  onChangeText={(value) =>
+                                    handleAddressFieldChange("houseUnit", value)
+                                  }
+                                />
+                              </>
+                            ) : null}
 
-                        <View style={styles.fieldRow}>
-                          <View style={styles.halfField}>
-                            <Text style={styles.fieldLabel}>City / Municipality</Text>
-                            <TextInput
-                              style={[styles.addressFieldInput, !isAddressEditorOpen && styles.readOnlyInput]}
-                              placeholder="San Pablo City"
-                              placeholderTextColor="#9AA4B2"
-                              value={addressFields.cityMunicipality}
-                              editable={isAddressEditorOpen && !isSaving}
-                              onChangeText={(value) =>
-                                handleAddressFieldChange("cityMunicipality", value)
-                              }
-                            />
-                          </View>
+                            {addressStep === 3 ? (
+                              <>
+                                <Text style={styles.fieldLabel}>Street Name</Text>
+                                <TextInput
+                                  style={styles.addressFieldInput}
+                                  placeholder="Rizal Street"
+                                  placeholderTextColor="#9AA4B2"
+                                  value={addressFields.streetName}
+                                  editable={!isSaving}
+                                  onChangeText={(value) =>
+                                    handleAddressFieldChange("streetName", value)
+                                  }
+                                />
+                              </>
+                            ) : null}
 
-                          <View style={styles.halfField}>
-                            <Text style={styles.fieldLabel}>Province</Text>
-                            <TextInput
-                              style={[styles.addressFieldInput, !isAddressEditorOpen && styles.readOnlyInput]}
-                              placeholder="Laguna"
-                              placeholderTextColor="#9AA4B2"
-                              value={addressFields.province}
-                              editable={isAddressEditorOpen && !isSaving}
-                              onChangeText={(value) => handleAddressFieldChange("province", value)}
-                            />
-                          </View>
-                        </View>
+                            {addressStep === 4 ? (
+                              <>
+                                <Text style={styles.fieldLabel}>Barangay</Text>
+                                <TextInput
+                                  style={styles.addressFieldInput}
+                                  placeholder="Barangay San Roque"
+                                  placeholderTextColor="#9AA4B2"
+                                  value={addressFields.barangay}
+                                  editable={!isSaving}
+                                  onChangeText={(value) =>
+                                    handleAddressFieldChange("barangay", value)
+                                  }
+                                />
+                              </>
+                            ) : null}
 
-                        <View style={styles.fieldRow}>
-                          <View style={styles.halfField}>
-                            <Text style={styles.fieldLabel}>ZIP Code</Text>
-                            <TextInput
-                              style={[styles.addressFieldInput, !isAddressEditorOpen && styles.readOnlyInput]}
-                              placeholder="4000"
-                              placeholderTextColor="#9AA4B2"
-                              keyboardType="number-pad"
-                              maxLength={4}
-                              value={addressFields.zipCode}
-                              editable={isAddressEditorOpen && !isSaving}
-                              onChangeText={(value) => handleAddressFieldChange("zipCode", value)}
-                            />
-                          </View>
+                            {addressStep === 5 ? (
+                              <View style={styles.fieldRow}>
+                                <View style={styles.halfField}>
+                                  <Text style={styles.fieldLabel}>City / Municipality</Text>
+                                  <TouchableOpacity
+                                    style={styles.inputButton}
+                                    onPress={() => setDropdownType("city")}
+                                    disabled={!addressFields.province}
+                                  >
+                                    <Text
+                                      style={[
+                                        styles.inputButtonText,
+                                        !addressFields.cityMunicipality && styles.placeholderText,
+                                        !addressFields.province && styles.disabledText,
+                                      ]}
+                                    >
+                                      {addressFields.cityMunicipality ||
+                                        (addressFields.province
+                                          ? "Select city/municipality"
+                                          : "Select province first")}
+                                    </Text>
+                                    <Ionicons name="chevron-down" size={18} color="#64748B" />
+                                  </TouchableOpacity>
+                                </View>
 
-                          <View style={styles.halfField}>
-                            <Text style={styles.fieldLabel}>Country</Text>
-                            <TextInput
-                              style={[styles.addressFieldInput, !isAddressEditorOpen && styles.readOnlyInput]}
-                              placeholder="Philippines"
-                              placeholderTextColor="#9AA4B2"
-                              value={addressFields.country}
-                              editable={isAddressEditorOpen && !isSaving}
-                              onChangeText={(value) => handleAddressFieldChange("country", value)}
-                            />
-                          </View>
-                        </View>
+                                <View style={styles.halfField}>
+                                  <Text style={styles.fieldLabel}>Province</Text>
+                                  <TouchableOpacity
+                                    style={styles.inputButton}
+                                    onPress={() => setDropdownType("province")}
+                                  >
+                                    <Text
+                                      style={[
+                                        styles.inputButtonText,
+                                        !addressFields.province && styles.placeholderText,
+                                      ]}
+                                    >
+                                      {addressFields.province || "Select province"}
+                                    </Text>
+                                    <Ionicons name="chevron-down" size={18} color="#64748B" />
+                                  </TouchableOpacity>
+                                </View>
+                              </View>
+                            ) : null}
+
+                            {addressStep === 6 ? (
+                              <View style={styles.fieldRow}>
+                                <View style={styles.halfField}>
+                                  <Text style={styles.fieldLabel}>ZIP Code</Text>
+                                  <TextInput
+                                    style={styles.addressFieldInput}
+                                    placeholder="4000"
+                                    placeholderTextColor="#9AA4B2"
+                                    keyboardType="number-pad"
+                                    maxLength={4}
+                                    value={addressFields.zipCode}
+                                    editable={!isSaving}
+                                    onChangeText={(value) =>
+                                      handleAddressFieldChange("zipCode", value)
+                                    }
+                                  />
+                                </View>
+
+                                <View style={styles.halfField}>
+                                  <Text style={styles.fieldLabel}>Country</Text>
+                                  <TextInput
+                                    style={styles.addressFieldInput}
+                                    placeholder="Philippines"
+                                    placeholderTextColor="#9AA4B2"
+                                    value={addressFields.country}
+                                    editable={!isSaving}
+                                    onChangeText={(value) =>
+                                      handleAddressFieldChange("country", value)
+                                    }
+                                  />
+                                </View>
+                              </View>
+                            ) : null}
+
+                            {addressStep === 7 ? (
+                              <>
+                                <Text style={styles.fieldLabel}>Pin Location</Text>
+                                <Text style={styles.helperText}>{locationSummary}</Text>
+                                <View style={styles.pinButtonRow}>
+                                  <TouchableOpacity
+                                    style={styles.locationButton}
+                                    onPress={() => setIsLocationPickerOpen(true)}
+                                  >
+                                    <Text style={styles.locationButtonText}>
+                                      {addressFields.latitude && addressFields.longitude
+                                        ? "Update Pin on Map"
+                                        : "Add Pin on Map"}
+                                    </Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    style={styles.clearPinButton}
+                                    onPress={() =>
+                                      setAddressFields((previous) => ({
+                                        ...previous,
+                                        latitude: null,
+                                        longitude: null,
+                                      }))
+                                    }
+                                  >
+                                    <Text style={styles.clearPinButtonText}>Clear Pin</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              </>
+                            ) : null}
+
+                            <View style={styles.addressStepControls}>
+                              <TouchableOpacity
+                                style={[
+                                  styles.stepButton,
+                                  addressStep === 1 && styles.stepButtonDisabled,
+                                ]}
+                                disabled={addressStep === 1}
+                                onPress={goToPreviousAddressStep}
+                              >
+                                <Text style={styles.stepButtonText}>Back</Text>
+                              </TouchableOpacity>
+                              {addressStep < totalAddressSteps ? (
+                                <TouchableOpacity
+                                  style={styles.stepButtonPrimary}
+                                  onPress={goToNextAddressStep}
+                                >
+                                  <Text style={styles.stepButtonPrimaryText}>Next</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+                          </>
+                        ) : null}
                       </>
                     ) : (
                       <Text style={styles.helperText}>No address added yet.</Text>
@@ -1031,7 +1565,7 @@ export default function AccountScreen() {
                     </Text>
                   ) : null}
 
-                  {isAnyEditorOpen ? (
+                  {isAnyEditorOpen && (!isAddressEditorOpen || addressStep === totalAddressSteps) ? (
                     <TouchableOpacity
                       style={[styles.saveBtn, isSaving && styles.disabledBtn]}
                       disabled={isSaving}
@@ -1049,6 +1583,39 @@ export default function AccountScreen() {
               {!!errorMessage && <Text style={styles.errorText}>{errorMessage}</Text>}
               {!!successMessage && <Text style={styles.successText}>{successMessage}</Text>}
             </View>
+
+            <Modal transparent visible={dropdownType !== null} animationType="fade">
+              <View style={styles.modalBackdrop}>
+                <View style={styles.modalCard}>
+                  <Text style={styles.modalTitle}>
+                    {dropdownType === "province" ? "Choose Province" : "Choose City / Municipality"}
+                  </Text>
+
+                  <ScrollView style={styles.optionList}>
+                    {dropdownOptions.map((item) => (
+                      <TouchableOpacity
+                        key={item}
+                        style={styles.optionRow}
+                        onPress={() => handlePickDropdownValue(item)}
+                      >
+                        <Text style={styles.optionRowText}>{item}</Text>
+                      </TouchableOpacity>
+                    ))}
+
+                    {!dropdownOptions.length && (
+                      <Text style={styles.emptyOptionText}>No options available.</Text>
+                    )}
+                  </ScrollView>
+
+                  <TouchableOpacity
+                    style={styles.modalCloseButton}
+                    onPress={() => setDropdownType(null)}
+                  >
+                    <Text style={styles.modalCloseText}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Modal>
 
             <View style={styles.infoCard}>
               {user ? (
@@ -1090,6 +1657,27 @@ export default function AccountScreen() {
             )}
           </View>
         </ScrollView>
+        <LocationPickerModal
+          visible={isLocationPickerOpen}
+          title="Set Address Pin"
+          initialCoordinates={
+            typeof addressFields.latitude === "number" &&
+            typeof addressFields.longitude === "number"
+              ? { latitude: addressFields.latitude, longitude: addressFields.longitude }
+              : null
+          }
+          onClose={() => setIsLocationPickerOpen(false)}
+          onSave={(coordinates) => {
+            setAddressFields((previous) => ({
+              ...previous,
+              latitude: coordinates.latitude,
+              longitude: coordinates.longitude,
+            }));
+            setIsLocationPickerOpen(false);
+            setErrorMessage("");
+            setSuccessMessage("Map pin updated. Save details to apply it.");
+          }}
+        />
       </SafeAreaView>
     </LinearGradient>
   );
@@ -1150,13 +1738,16 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     gap: 10,
   },
-  nameActionRow: {
+  nameValueRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-    marginTop: -2,
-    marginBottom: 10,
+    justifyContent: "flex-end",
+    gap: 8,
+    flex: 1,
+  },
+  iconButton: {
+    padding: 4,
+    borderRadius: 999,
   },
   nameCooldownText: {
     flex: 1,
@@ -1281,6 +1872,194 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#4B5563",
     lineHeight: 17,
+  },
+  inputButton: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+    minHeight: 46,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  inputButtonText: {
+    fontSize: 14,
+    color: "#111827",
+    fontWeight: "600",
+  },
+  placeholderText: {
+    color: "#94A3B8",
+  },
+  disabledText: {
+    color: "#B4BCC8",
+  },
+  locationButton: {
+    marginTop: 6,
+    alignSelf: "flex-start",
+    borderRadius: 12,
+    backgroundColor: "#E6F4FE",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  locationButtonText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#1B5EA8",
+  },
+  pinButtonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 8,
+  },
+  clearPinButton: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#F4C430",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "#FFF7DA",
+  },
+  clearPinButtonText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#B45309",
+  },
+  addressCard: {
+    borderWidth: 1,
+    borderColor: "#D6E4F1",
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    backgroundColor: "#FFFFFF",
+  },
+  addressCardActive: {
+    borderColor: "#1BA2EC",
+    backgroundColor: "rgba(27, 162, 236, 0.08)",
+  },
+  addressCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  addressCardTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  addressEditButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  addressEditText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#1D4ED8",
+  },
+  addressCardBody: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: "#475569",
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.46)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 18,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    padding: 18,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#0F172A",
+    marginBottom: 12,
+  },
+  optionList: {
+    maxHeight: 260,
+  },
+  optionRow: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+  },
+  optionRowText: {
+    fontSize: 14,
+    color: "#0F172A",
+    fontWeight: "600",
+  },
+  emptyOptionText: {
+    paddingVertical: 16,
+    textAlign: "center",
+    color: "#64748B",
+    fontSize: 12,
+  },
+  modalCloseButton: {
+    marginTop: 14,
+    borderRadius: 14,
+    backgroundColor: "#F4C430",
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  modalCloseText: {
+    fontWeight: "800",
+    color: "#111827",
+  },
+  stepPill: {
+    alignSelf: "flex-start",
+    backgroundColor: "#E7F2FF",
+    color: "#1D4ED8",
+    fontSize: 11,
+    fontWeight: "800",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    marginBottom: 10,
+  },
+  addressStepControls: {
+    marginTop: 14,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  stepButton: {
+    flex: 1,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    paddingVertical: 10,
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+  },
+  stepButtonDisabled: {
+    opacity: 0.5,
+  },
+  stepButtonText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#334155",
+  },
+  stepButtonPrimary: {
+    flex: 1,
+    borderRadius: 14,
+    backgroundColor: "#F4C430",
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  stepButtonPrimaryText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#111827",
   },
   smallOutlineBtn: {
     borderWidth: 1,

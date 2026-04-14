@@ -323,6 +323,10 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     setFormError("");
+    const popupTimeout = setTimeout(() => {
+      setIsLoading(false);
+      setFormError("Sign in cancelled.");
+    }, 30000);
 
     try {
       const provider =
@@ -343,12 +347,17 @@ export default function LoginScreen() {
       let message = "Unable to sign in with provider right now.";
       if (error?.code === "auth/popup-closed-by-user") {
         message = "Sign in cancelled.";
+      } else if (error?.code === "auth/popup-blocked") {
+        message = "Popup blocked. Please allow popups and try again.";
+      } else if (error?.code === "auth/cancelled-popup-request") {
+        message = "Sign in cancelled.";
       } else if (error?.code === "auth/account-exists-with-different-credential") {
         message = "This email is already registered with a different sign-in method.";
       }
 
       setFormError(message);
     } finally {
+      clearTimeout(popupTimeout);
       setIsLoading(false);
     }
   };

@@ -19,6 +19,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Modal,
   Platform,
   SafeAreaView,
@@ -31,6 +32,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { LocationPickerModal } from "../../components/location-picker-modal";
 import { auth, db } from "../../lib/firebase";
 import {
   ACTION_OPTIONS,
@@ -82,6 +84,11 @@ const DEFAULT_SERVICE_ACTIONS: ServiceActionState = {
   fold: false,
 };
 
+function isValidImageUrl(value: string): boolean {
+  if (!value) return false;
+  return /^https?:\/\/.+/i.test(value.trim());
+}
+
 function parseTimeInput(value: string, fallback: string): string {
   const normalized = value.trim();
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(normalized) ? normalized : fallback;
@@ -110,7 +117,7 @@ function statusLabel(shop: LaundryShop): string {
   if (!shop.isActive) {
     return "Inactive (hidden from customers)";
   }
-  return isShopAutoOpen(shop) ? "Active · Open now" : "Active · Closed by schedule";
+  return isShopAutoOpen(shop) ? "Active - Open now" : "Active - Closed by schedule";
 }
 
 function defaultWindowLabel(startHour: number, endHour: number): string {
@@ -220,6 +227,7 @@ export default function ShopManagementScreen() {
   const [newWindowStartHour, setNewWindowStartHour] = useState("9");
   const [newWindowEndHour, setNewWindowEndHour] = useState("12");
   const [newWindowService, setNewWindowService] = useState<ServiceSpeed>("standard");
+  const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [pickupWindowEditorId, setPickupWindowEditorId] = useState<string | null>(null);
   const [isPickupWindowDialogOpen, setIsPickupWindowDialogOpen] = useState(false);
   const [isShopProfileOpen, setIsShopProfileOpen] = useState(false);
@@ -237,6 +245,11 @@ export default function ShopManagementScreen() {
   const [bookingPickupDate, setBookingPickupDate] = useState("");
   const [bookingTotalAmount, setBookingTotalAmount] = useState("");
   const [bookingStatus, setBookingStatus] = useState("new");
+  const hasShop = !!shopId;
+  const hasUnsavedChanges = useMemo(() => {
+    if (!shopDraft || !shopBase) return false;
+    return JSON.stringify(shopDraft) !== JSON.stringify(shopBase);
+  }, [shopDraft, shopBase]);
 
   const clearMessages = () => {
     setErrorText("");
@@ -283,7 +296,22 @@ export default function ShopManagementScreen() {
     setActiveProfileEditor(section);
   };
 
-  const cancelProfileEditor = () => {
+  const cancelProfileEditor = async () => {
+    if (!hasShop) {
+      setProfileEditBackup(null);
+      setActiveProfileEditor(null);
+      router.replace("/(tabs)/account");
+      return;
+    }
+    if (hasUnsavedChanges) {
+      const shouldDiscard = await confirmAction(
+        "Discard changes?",
+        "You have unsaved edits. Are you sure you want to discard them?"
+      );
+      if (!shouldDiscard) {
+        return;
+      }
+    }
     if (profileEditBackup) {
       setShopDraft(cloneShopDraft(profileEditBackup));
     }
@@ -322,6 +350,10 @@ export default function ShopManagementScreen() {
 
   const openAddServiceDialog = () => {
     clearMessages();
+    if (!shopId) {
+      setErrorText("Create your shop first to add services.");
+      return;
+    }
     resetServiceForm();
     setIsServiceCatalogOpen(true);
     setIsServiceDialogOpen(true);
@@ -371,9 +403,6 @@ export default function ShopManagementScreen() {
     }
 
     let cancelled = false;
-    let unsubscribeShop: (() => void) | null = null;
-    let unsubscribeServices: (() => void) | null = null;
-    let unsubscribeOrders: (() => void) | null = null;
 
     const bootstrap = async () => {
       setIsBootstrapping(true);
@@ -384,72 +413,28 @@ export default function ShopManagementScreen() {
           query(collection(db, "laundryShops"), where("ownerUid", "==", user.uid), limit(1))
         );
 
-        let activeShopId = "";
         if (existingShopSnapshot.empty) {
-          const created = await addDoc(collection(db, "laundryShops"), {
+          const emailPrefix = (user.email ?? "").split("@")[0];
+          const suggestedName = user.displayName?.trim() || emailPrefix;
+          const draft = parseLaundryShop("draft", {
             ...makeDefaultShopPayload(user.uid, user.email ?? ""),
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
+            shopName: suggestedName ? `${suggestedName}'s Laundry` : "My Laundry Shop",
           });
-          activeShopId = created.id;
-          await seedDefaultServices(activeShopId);
+          draft.addressFields.country = "Philippines";
+          setShopId("");
+          setShopDraft(draft);
+          setShopBase(draft);
+          setServices([]);
+          setOrders([]);
+          setIsShopProfileOpen(true);
+          setActiveProfileEditor("basic");
         } else {
-          activeShopId = existingShopSnapshot.docs[0].id;
+          setShopId(existingShopSnapshot.docs[0].id);
         }
 
         if (cancelled) {
           return;
         }
-
-        setShopId(activeShopId);
-
-        unsubscribeShop = onSnapshot(doc(db, "laundryShops", activeShopId), (snapshot) => {
-          if (!snapshot.exists()) {
-            setShopDraft(null);
-            setShopBase(null);
-            return;
-          }
-          const parsed = parseLaundryShop(snapshot.id, snapshot.data());
-          setShopDraft(parsed);
-          setShopBase(parsed);
-        });
-
-        unsubscribeServices = onSnapshot(
-          query(collection(db, "laundryShops", activeShopId, "services"), orderBy("createdAt", "desc")),
-          (snapshot) => {
-            setServices(snapshot.docs.map((item) => normalizeLaundryService(item.id, item.data())));
-          }
-        );
-
-        unsubscribeOrders = onSnapshot(
-          query(collection(db, "laundryShops", activeShopId, "orders"), orderBy("createdAt", "desc"), limit(20)),
-          (snapshot) => {
-            setOrders(
-              snapshot.docs.map((item) => {
-                const data = item.data() as Record<string, unknown>;
-                const currentName = String(data.customerNameCurrent ?? data.customerName ?? "Customer");
-                const previousName = String(data.customerNamePrevious ?? "");
-                return {
-                  id: item.id,
-                  customerUid: String(data.customerUid ?? ""),
-                  customerName: currentName,
-                  customerNameDisplay:
-                    previousName && previousName !== currentName
-                      ? `${previousName} -> ${currentName}`
-                      : currentName,
-                  serviceType: String(data.serviceType ?? "Standard"),
-                  pickupDate: String(data.pickupDate ?? "No date"),
-                  totalAmount: String(data.totalAmount ?? "P0"),
-                  status: String(data.status ?? "new"),
-                  isDemo:
-                    data.isDemo === true ||
-                    String(data.customerNameCurrent ?? data.customerName ?? "").trim() ===
-                      "Sample Customer",
-                };
-              })
-            );
-          }
-        );
       } catch (error: any) {
         if (!cancelled) {
           setErrorText(error?.message ?? "Unable to load owner management.");
@@ -466,11 +451,102 @@ export default function ShopManagementScreen() {
 
     return () => {
       cancelled = true;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") {
+      return;
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedChanges) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    if (!user || !shopId) {
+      return;
+    }
+
+    let cancelled = false;
+    let unsubscribeShop: (() => void) | null = null;
+    let unsubscribeServices: (() => void) | null = null;
+    let unsubscribeOrders: (() => void) | null = null;
+
+    setIsBootstrapping(true);
+    clearMessages();
+
+    unsubscribeShop = onSnapshot(doc(db, "laundryShops", shopId), (snapshot) => {
+      if (!snapshot.exists()) {
+        if (!cancelled) {
+          setShopDraft(null);
+          setShopBase(null);
+        }
+        return;
+      }
+      const parsed = parseLaundryShop(snapshot.id, snapshot.data());
+      if (!cancelled) {
+        setShopDraft(parsed);
+        setShopBase(parsed);
+        setIsBootstrapping(false);
+      }
+    });
+
+    unsubscribeServices = onSnapshot(
+      query(collection(db, "laundryShops", shopId, "services"), orderBy("createdAt", "desc")),
+      (snapshot) => {
+        if (!cancelled) {
+          setServices(snapshot.docs.map((item) => normalizeLaundryService(item.id, item.data())));
+        }
+      }
+    );
+
+    unsubscribeOrders = onSnapshot(
+      query(collection(db, "laundryShops", shopId, "orders"), orderBy("createdAt", "desc"), limit(20)),
+      (snapshot) => {
+        if (!cancelled) {
+          setOrders(
+            snapshot.docs.map((item) => {
+              const data = item.data() as Record<string, unknown>;
+              const currentName = String(data.customerNameCurrent ?? data.customerName ?? "Customer");
+              const previousName = String(data.customerNamePrevious ?? "");
+              return {
+                id: item.id,
+                customerUid: String(data.customerUid ?? ""),
+                customerName: currentName,
+                customerNameDisplay:
+                  previousName && previousName !== currentName
+                    ? `${previousName} -> ${currentName}`
+                    : currentName,
+                serviceType: String(data.serviceType ?? "Standard"),
+                pickupDate: String(data.pickupDate ?? "No date"),
+                totalAmount: String(data.totalAmount ?? "P0"),
+                status: String(data.status ?? "new"),
+                isDemo:
+                  data.isDemo === true ||
+                  String(data.customerNameCurrent ?? data.customerName ?? "").trim() === "Sample Customer",
+              };
+            })
+          );
+        }
+      }
+    );
+
+    return () => {
+      cancelled = true;
       if (unsubscribeShop) unsubscribeShop();
       if (unsubscribeServices) unsubscribeServices();
       if (unsubscribeOrders) unsubscribeOrders();
     };
-  }, [user]);
+  }, [user, shopId]);
 
   const serviceSupport = useMemo(() => getServiceSupportMap(services), [services]);
   const shopStatusText = useMemo(() => (shopDraft ? statusLabel(shopDraft) : "Closed"), [shopDraft]);
@@ -478,6 +554,16 @@ export default function ShopManagementScreen() {
     () => (shopDraft ? formatPriceLabel(shopDraft.priceRangeMin, shopDraft.priceRangeMax) : "Price not set"),
     [shopDraft]
   );
+  const shopLocationSummary = useMemo(() => {
+    if (
+      shopDraft &&
+      typeof shopDraft.addressFields.latitude === "number" &&
+      typeof shopDraft.addressFields.longitude === "number"
+    ) {
+      return `${shopDraft.addressFields.latitude.toFixed(6)}, ${shopDraft.addressFields.longitude.toFixed(6)}`;
+    }
+    return "No map pin saved yet.";
+  }, [shopDraft]);
 
   const handleShopField = (field: keyof LaundryShop, value: LaundryShop[keyof LaundryShop]) => {
     updateShop((previous) => ({ ...previous, [field]: value }));
@@ -595,7 +681,7 @@ export default function ShopManagementScreen() {
   };
 
   const saveShopDetails = async (): Promise<boolean> => {
-    if (!shopId || !shopDraft) {
+    if (!shopDraft) {
       return false;
     }
 
@@ -612,14 +698,6 @@ export default function ShopManagementScreen() {
       return false;
     }
 
-    const shouldSave = await confirmAction(
-      "Update shop details?",
-      "This will apply your latest edits to customer-facing pages."
-    );
-    if (!shouldSave) {
-      return false;
-    }
-
     const normalizedAddressFields: AddressFields = {
       houseUnit: shopDraft.addressFields.houseUnit.trim(),
       streetName: shopDraft.addressFields.streetName.trim(),
@@ -628,7 +706,35 @@ export default function ShopManagementScreen() {
       province: shopDraft.addressFields.province.trim(),
       zipCode: shopDraft.addressFields.zipCode.replace(/\D/g, "").slice(0, 4),
       country: shopDraft.addressFields.country.trim() || "Philippines",
+      latitude:
+        typeof shopDraft.addressFields.latitude === "number" &&
+        Number.isFinite(shopDraft.addressFields.latitude)
+          ? shopDraft.addressFields.latitude
+          : null,
+      longitude:
+        typeof shopDraft.addressFields.longitude === "number" &&
+        Number.isFinite(shopDraft.addressFields.longitude)
+          ? shopDraft.addressFields.longitude
+          : null,
     };
+
+    const requiredFields: Array<{ label: string; value: string }> = [
+      { label: "shop name", value: shopName },
+      { label: "owner name", value: shopDraft.ownerName.trim() },
+      { label: "contact number", value: shopDraft.contactNumber.trim() },
+      { label: "house/unit/building", value: normalizedAddressFields.houseUnit },
+      { label: "street name", value: normalizedAddressFields.streetName },
+      { label: "barangay", value: normalizedAddressFields.barangay },
+      { label: "city/municipality", value: normalizedAddressFields.cityMunicipality },
+      { label: "province", value: normalizedAddressFields.province },
+      { label: "ZIP code", value: normalizedAddressFields.zipCode },
+    ];
+
+    const missingFields = requiredFields.filter((field) => !field.value).map((field) => field.label);
+    if (missingFields.length > 0) {
+      setErrorText(`Please complete: ${missingFields.join(", ")}.`);
+      return false;
+    }
 
     const payload = {
       shopName,
@@ -667,11 +773,41 @@ export default function ShopManagementScreen() {
 
     setIsSavingShop(true);
     try {
-      await updateDoc(doc(db, "laundryShops", shopId), payload);
-      setSuccessText("Shop details saved.");
+      if (!shopId) {
+        const shouldCreate = await confirmAction(
+          "Create shop?",
+          "This will create your shop profile and enable the owner tools."
+        );
+        if (!shouldCreate) {
+          return false;
+        }
+
+        const created = await addDoc(collection(db, "laundryShops"), {
+          ...payload,
+          ownerUid: user?.uid ?? "",
+          ownerEmail: user?.email ?? "",
+          ratingAverage: 0,
+          ratingCount: 0,
+          priceRangeMin: shopDraft.priceRangeMin,
+          priceRangeMax: shopDraft.priceRangeMax,
+          createdAt: serverTimestamp(),
+        });
+        setShopId(created.id);
+        setSuccessText("Shop created successfully.");
+      } else {
+        const shouldSave = await confirmAction(
+          "Update shop details?",
+          "This will apply your latest edits to customer-facing pages."
+        );
+        if (!shouldSave) {
+          return false;
+        }
+        await updateDoc(doc(db, "laundryShops", shopId), payload);
+        setSuccessText("Shop details saved.");
+      }
       return true;
     } catch {
-      setErrorText("Unable to save shop details.");
+      setErrorText(shopId ? "Unable to save shop details." : "Unable to create shop.");
       return false;
     } finally {
       setIsSavingShop(false);
@@ -1047,7 +1183,7 @@ export default function ShopManagementScreen() {
 
   const priceRange = priceRangeLabel;
   const isDesktop = width >= 920;
-  const statusDirty = !!shopDraft && !!shopBase && shopDraft.isActive !== shopBase.isActive;
+  const statusDirty = !!shopId && !!shopDraft && !!shopBase && shopDraft.isActive !== shopBase.isActive;
 
   return (
     <LinearGradient colors={["#55B7E9", "#2E95D3"]} style={styles.container}>
@@ -1056,29 +1192,65 @@ export default function ShopManagementScreen() {
           <Text style={styles.title}>Laundry Owner Management</Text>
           <Text style={styles.subtitle}>Configure your shop and keep customer pages synced.</Text>
 
-          <View style={styles.statusRow}>
-            <View style={[styles.statusPill, shopDraft.isActive ? styles.statusPillOpen : styles.statusPillClosed]}>
-              <Text style={styles.statusPillText}>{shopDraft.isActive ? "Active" : "Inactive"}</Text>
+          {(errorText || successText) ? (
+            <View style={[styles.toast, errorText ? styles.toastError : styles.toastSuccess]}>
+              <Text style={styles.toastText}>{errorText || successText}</Text>
             </View>
-            <Text style={styles.statusLabel}>{shopStatusText}</Text>
-            <View style={styles.statusSwitchWrap}>
-              <Text style={styles.statusSwitchText}>Active for customers</Text>
-              <Switch
-                value={shopDraft.isActive}
-                onValueChange={updateActiveStatus}
-                trackColor={{ false: "#94A3B8", true: "#34D399" }}
-                thumbColor="#FFFFFF"
-              />
+          ) : null}
+
+          {!hasShop ? (
+            <View style={styles.noticeCard}>
+              <Text style={styles.noticeTitle}>Create your laundry shop</Text>
+              <Text style={styles.noticeText}>
+                Fill in your shop details below, then tap “Create Shop” to finish. No shop is created
+                until you save.
+              </Text>
             </View>
-            {statusDirty ? (
-              <TouchableOpacity style={styles.smallButton} onPress={() => void saveActiveStatus()}>
-                <Text style={styles.smallButtonText}>Save Status</Text>
-              </TouchableOpacity>
-            ) : null}
+          ) : null}
+
+          <View style={styles.previewCard}>
+            <Text style={styles.previewTitle}>Customer Preview</Text>
+            <Text style={styles.previewName}>{shopDraft.shopName || "Laundry Shop"}</Text>
+            <Text style={styles.previewMeta}>{priceRangeLabel} • {buildAddressLabel(shopDraft.addressFields) || "Address not set"}</Text>
+            <Text style={styles.previewMeta}>Distance: {shopDraft.distanceKm.toFixed(1)} km</Text>
           </View>
 
-          {!!errorText && <Text style={styles.errorText}>{errorText}</Text>}
-          {!!successText && <Text style={styles.successText}>{successText}</Text>}
+          <View style={styles.statusRow}>
+            <View
+              style={[
+                styles.statusPill,
+                !hasShop ? styles.statusPillDraft : shopDraft.isActive ? styles.statusPillOpen : styles.statusPillClosed,
+              ]}
+            >
+              <Text style={styles.statusPillText}>
+                {!hasShop ? "Draft" : shopDraft.isActive ? "Active" : "Inactive"}
+              </Text>
+            </View>
+            <Text style={styles.statusLabel}>
+              {!hasShop ? "Not created yet" : shopStatusText}
+            </Text>
+            {hasShop ? (
+              <>
+                <View style={styles.statusSwitchWrap}>
+                  <Text style={styles.statusSwitchText}>Active for customers</Text>
+                  <Switch
+                    value={shopDraft.isActive}
+                    onValueChange={updateActiveStatus}
+                    trackColor={{ false: "#94A3B8", true: "#34D399" }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+                {statusDirty ? (
+                  <TouchableOpacity style={styles.smallButton} onPress={() => void saveActiveStatus()}>
+                    <Text style={styles.smallButtonText}>Save Status</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </>
+            ) : (
+              <Text style={styles.statusHelperText}>Create a shop to enable this.</Text>
+            )}
+          </View>
+
           <View style={styles.card}>
             <View style={styles.sectionHeaderRow}>
               <View style={styles.sectionHeaderCopy}>
@@ -1131,6 +1303,7 @@ export default function ShopManagementScreen() {
                   <Text style={styles.profileSectionTitle}>Address</Text>
                   <Text style={styles.listSubtext}>{buildAddressLabel(shopDraft.addressFields)}</Text>
                   <Text style={styles.listSubtext}>Country: Philippines</Text>
+                  <Text style={styles.listSubtext}>Pin: {shopLocationSummary}</Text>
                   <TouchableOpacity style={[styles.smallButton, styles.profileActionButton]} onPress={() => openProfileEditor("address")}>
                     <Text style={styles.smallButtonText}>Edit Address</Text>
                   </TouchableOpacity>
@@ -1172,18 +1345,24 @@ export default function ShopManagementScreen() {
           </View>
 
 
-          <View style={styles.card}>
+          <View style={[styles.card, !hasShop && styles.cardDisabled]}>
             <View style={styles.sectionHeaderRow}>
               <View style={styles.sectionHeaderCopy}>
                 <Text style={styles.cardTitle}>Load Definitions</Text>
                 <Text style={styles.cardHint}>Set what each load includes and which actions are allowed.</Text>
               </View>
-              <TouchableOpacity style={styles.smallButton} onPress={() => setIsLoadDefinitionsOpen((previous) => !previous)}>
+              <TouchableOpacity
+                style={styles.smallButton}
+                disabled={!hasShop}
+                onPress={() => setIsLoadDefinitionsOpen((previous) => !previous)}
+              >
                 <Text style={styles.smallButtonText}>{isLoadDefinitionsOpen ? "Close" : "Edit"}</Text>
               </TouchableOpacity>
             </View>
 
-            {!isLoadDefinitionsOpen ? (
+            {!hasShop ? (
+              <Text style={styles.cardHint}>Create your shop to edit load definitions.</Text>
+            ) : !isLoadDefinitionsOpen ? (
               <View style={styles.summaryBlock}>
                 <Text style={styles.listSubtext}>
                   Normal actions: {shopDraft.loadConfigs.normal.allowedActions.join(" + ") || "None"}
@@ -1290,7 +1469,8 @@ export default function ShopManagementScreen() {
               </>
             )}
           </View>
-          <View style={styles.card}>
+          {hasShop ? (
+            <View style={styles.card}>
             <View style={styles.sectionHeaderRow}>
               <View style={styles.sectionHeaderCopy}>
                 <Text style={styles.cardTitle}>Pickup Window Control</Text>
@@ -1343,9 +1523,11 @@ export default function ShopManagementScreen() {
                 </TouchableOpacity>
               </>
             ) : null}
-          </View>
+            </View>
+          ) : null}
 
-          <View style={styles.card}>
+          {hasShop ? (
+            <View style={styles.card}>
             <View style={styles.sectionHeaderRow}>
               <View style={styles.sectionHeaderCopy}>
                 <Text style={styles.cardTitle}>Service Catalog</Text>
@@ -1395,7 +1577,8 @@ export default function ShopManagementScreen() {
                 </View>
               ))
             )}
-          </View>
+            </View>
+          ) : null}
 
           <View style={styles.card}>
             <View style={styles.sectionHeaderRow}>
@@ -1457,59 +1640,83 @@ export default function ShopManagementScreen() {
           onRequestClose={cancelProfileEditor}
         >
           <View style={styles.dialogBackdrop}>
-            <ScrollView
-              style={styles.dialogCard}
-              contentContainerStyle={styles.dialogCardBody}
-              showsVerticalScrollIndicator={false}
-            >
-              <Text style={styles.cardTitle}>
-                {activeProfileEditor === "basic"
-                  ? "Edit Profile"
-                  : activeProfileEditor === "address"
-                    ? "Edit Address"
-                    : activeProfileEditor === "operations"
-                      ? "Edit Schedule"
-                      : activeProfileEditor === "services"
-                        ? "Edit Services"
-                        : "Edit Branding"}
-              </Text>
+            <View style={styles.dialogContainer}>
+              <ScrollView
+                style={styles.dialogCard}
+                contentContainerStyle={[styles.dialogCardBody, styles.dialogCardBodyWithFooter]}
+                showsVerticalScrollIndicator={false}
+              >
+                {!hasShop ? <Text style={styles.stepPill}>Step 1 of 3 - Basic Info</Text> : null}
+                <Text style={styles.cardTitle}>
+                  {activeProfileEditor === "basic"
+                    ? "Edit Profile"
+                    : activeProfileEditor === "address"
+                      ? "Edit Address"
+                      : activeProfileEditor === "operations"
+                        ? "Edit Schedule"
+                        : activeProfileEditor === "services"
+                          ? "Edit Services"
+                          : "Edit Branding"}
+                </Text>
+                <Text style={styles.requiredHint}>Fields marked * are required.</Text>
 
               {activeProfileEditor === "basic" ? (
                 <>
-                  <Text style={styles.fieldLabel}>Shop name</Text>
+                  <Text style={styles.fieldLabel}>Shop name *</Text>
                   <TextInput style={styles.input} value={shopDraft.shopName} onChangeText={(value) => handleShopField("shopName", value)} />
-                  <Text style={styles.fieldLabel}>Owner name</Text>
+                  <Text style={styles.requiredHint}>Required</Text>
+                  <Text style={styles.fieldLabel}>Owner name *</Text>
                   <TextInput style={styles.input} value={shopDraft.ownerName} onChangeText={(value) => handleShopField("ownerName", value)} />
-                  <Text style={styles.fieldLabel}>Contact number</Text>
+                  <Text style={styles.requiredHint}>Required</Text>
+                  <Text style={styles.fieldLabel}>Contact number *</Text>
                   <TextInput style={styles.input} value={shopDraft.contactNumber} onChangeText={(value) => handleShopField("contactNumber", value)} />
+                  <Text style={styles.requiredHint}>Required</Text>
                 </>
               ) : null}
 
               {activeProfileEditor === "address" ? (
                 <>
-                  <Text style={styles.fieldLabel}>House/Unit/Building</Text>
+                  <Text style={styles.fieldLabel}>House/Unit/Building *</Text>
                   <TextInput style={styles.input} value={shopDraft.addressFields.houseUnit} onChangeText={(value) => handleAddressField("houseUnit", value)} />
-                  <Text style={styles.fieldLabel}>Street</Text>
+                  <Text style={styles.requiredHint}>Required</Text>
+                  <Text style={styles.fieldLabel}>Street *</Text>
                   <TextInput style={styles.input} value={shopDraft.addressFields.streetName} onChangeText={(value) => handleAddressField("streetName", value)} />
-                  <Text style={styles.fieldLabel}>Barangay</Text>
+                  <Text style={styles.requiredHint}>Required</Text>
+                  <Text style={styles.fieldLabel}>Barangay *</Text>
                   <TextInput style={styles.input} value={shopDraft.addressFields.barangay} onChangeText={(value) => handleAddressField("barangay", value)} />
+                  <Text style={styles.requiredHint}>Required</Text>
                   <View style={styles.twoColumn}>
                     <View style={styles.columnItem}>
-                      <Text style={styles.fieldLabel}>City / Municipality</Text>
+                      <Text style={styles.fieldLabel}>City / Municipality *</Text>
                       <TextInput style={styles.input} value={shopDraft.addressFields.cityMunicipality} onChangeText={(value) => handleAddressField("cityMunicipality", value)} />
+                      <Text style={styles.requiredHint}>Required</Text>
                     </View>
                     <View style={styles.columnItem}>
-                      <Text style={styles.fieldLabel}>Province</Text>
+                      <Text style={styles.fieldLabel}>Province *</Text>
                       <TextInput style={styles.input} value={shopDraft.addressFields.province} onChangeText={(value) => handleAddressField("province", value)} />
+                      <Text style={styles.requiredHint}>Required</Text>
                     </View>
                   </View>
-                  <Text style={styles.fieldLabel}>ZIP Code</Text>
+                  <Text style={styles.fieldLabel}>ZIP Code *</Text>
                   <TextInput
                     style={styles.input}
                     value={shopDraft.addressFields.zipCode}
                     keyboardType="number-pad"
                     onChangeText={(value) => handleAddressField("zipCode", value.replace(/\D/g, "").slice(0, 4))}
                   />
+                  <Text style={styles.requiredHint}>Required</Text>
+                  <Text style={styles.fieldLabel}>Pin Location</Text>
+                  <Text style={styles.cardHint}>{shopLocationSummary}</Text>
+                  <TouchableOpacity
+                    style={[styles.smallButton, styles.profileActionButton]}
+                    onPress={() => setIsLocationPickerOpen(true)}
+                  >
+                    <Text style={styles.smallButtonText}>
+                      {shopDraft.addressFields.latitude && shopDraft.addressFields.longitude
+                        ? "Update Pin on Map"
+                        : "Add Pin on Map"}
+                    </Text>
+                  </TouchableOpacity>
                   <Text style={styles.cardHint}>Country is automatically set to Philippines.</Text>
                 </>
               ) : null}
@@ -1518,18 +1725,21 @@ export default function ShopManagementScreen() {
                 <>
                   <View style={styles.twoColumn}>
                     <View style={styles.columnItem}>
-                      <Text style={styles.fieldLabel}>Opening (HH:mm)</Text>
+                      <Text style={styles.fieldLabel}>Opening (HH:mm) *</Text>
                       <TextInput style={styles.input} value={shopDraft.openingTime} onChangeText={(value) => handleShopField("openingTime", value)} />
+                      <Text style={styles.requiredHint}>Required</Text>
                     </View>
                     <View style={styles.columnItem}>
-                      <Text style={styles.fieldLabel}>Closing (HH:mm)</Text>
+                      <Text style={styles.fieldLabel}>Closing (HH:mm) *</Text>
                       <TextInput style={styles.input} value={shopDraft.closingTime} onChangeText={(value) => handleShopField("closingTime", value)} />
+                      <Text style={styles.requiredHint}>Required</Text>
                     </View>
                   </View>
                   <View style={styles.twoColumn}>
                     <View style={styles.columnItem}>
-                      <Text style={styles.fieldLabel}>Same-day cutoff (HH:mm)</Text>
+                      <Text style={styles.fieldLabel}>Same-day cutoff (HH:mm) *</Text>
                       <TextInput style={styles.input} value={shopDraft.standardCutoffTime} onChangeText={(value) => handleShopField("standardCutoffTime", value)} />
+                      <Text style={styles.requiredHint}>Required</Text>
                     </View>
                     <View style={styles.columnItem}>
                       <Text style={styles.fieldLabel}>Max orders/day</Text>
@@ -1649,6 +1859,13 @@ export default function ShopManagementScreen() {
                     placeholder="https://..."
                     placeholderTextColor="#8B95A7"
                   />
+                  {shopDraft.bannerImageUrl ? (
+                    isValidImageUrl(shopDraft.bannerImageUrl) ? (
+                      <Image source={{ uri: shopDraft.bannerImageUrl }} style={styles.previewImage} />
+                    ) : (
+                      <Text style={styles.requiredHint}>Image URL looks invalid.</Text>
+                    )
+                  ) : null}
                   <Text style={styles.fieldLabel}>Logo image URL (optional)</Text>
                   <TextInput
                     style={styles.input}
@@ -1657,10 +1874,17 @@ export default function ShopManagementScreen() {
                     placeholder="https://..."
                     placeholderTextColor="#8B95A7"
                   />
+                  {shopDraft.logoImageUrl ? (
+                    isValidImageUrl(shopDraft.logoImageUrl) ? (
+                      <Image source={{ uri: shopDraft.logoImageUrl }} style={styles.previewImage} />
+                    ) : (
+                      <Text style={styles.requiredHint}>Image URL looks invalid.</Text>
+                    )
+                  ) : null}
                 </>
               ) : null}
-
-              <View style={styles.dialogActions}>
+              </ScrollView>
+              <View style={styles.dialogStickyBar}>
                 <TouchableOpacity style={[styles.secondaryButton, styles.flexButton]} onPress={cancelProfileEditor}>
                   <Text style={styles.secondaryButtonText}>Cancel</Text>
                 </TouchableOpacity>
@@ -1669,10 +1893,12 @@ export default function ShopManagementScreen() {
                   disabled={isSavingShop}
                   onPress={() => void saveActiveProfileEditor()}
                 >
-                  <Text style={styles.primaryButtonText}>{isSavingShop ? "Saving..." : "Save Changes"}</Text>
+                  <Text style={styles.primaryButtonText}>
+                    {isSavingShop ? "Saving..." : hasShop ? "Save Changes" : "Create Shop"}
+                  </Text>
                 </TouchableOpacity>
               </View>
-            </ScrollView>
+            </View>
           </View>
         </Modal>
 
@@ -1866,6 +2092,35 @@ export default function ShopManagementScreen() {
             </ScrollView>
           </View>
         </Modal>
+
+        <LocationPickerModal
+          visible={isLocationPickerOpen}
+          title="Set Shop Pin"
+          initialCoordinates={
+            shopDraft &&
+            typeof shopDraft.addressFields.latitude === "number" &&
+            typeof shopDraft.addressFields.longitude === "number"
+              ? {
+                  latitude: shopDraft.addressFields.latitude,
+                  longitude: shopDraft.addressFields.longitude,
+                }
+              : null
+          }
+          onClose={() => setIsLocationPickerOpen(false)}
+          onSave={(coordinates) => {
+            updateShop((previous) => ({
+              ...previous,
+              addressFields: {
+                ...previous.addressFields,
+                latitude: coordinates.latitude,
+                longitude: coordinates.longitude,
+              },
+            }));
+            setIsLocationPickerOpen(false);
+            setSuccessText("Shop pin updated. Save shop details to apply it.");
+            setErrorText("");
+          }}
+        />
       </SafeAreaView>
     </LinearGradient>
   );
@@ -1877,14 +2132,27 @@ const styles = StyleSheet.create({
   scrollBody: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 120 },
   title: { fontSize: 24, fontWeight: "800", color: "#FFFFFF" },
   subtitle: { marginTop: 6, fontSize: 13, color: "#EAF7FF" },
+  toast: { marginTop: 10, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10 },
+  toastError: { backgroundColor: "rgba(244, 63, 94, 0.2)", borderWidth: 1, borderColor: "rgba(244,63,94,0.45)" },
+  toastSuccess: { backgroundColor: "rgba(34, 197, 94, 0.2)", borderWidth: 1, borderColor: "rgba(34,197,94,0.45)" },
+  toastText: { color: "#FFFFFF", fontSize: 12, fontWeight: "700" },
+  noticeCard: { marginTop: 12, backgroundColor: "rgba(255,255,255,0.16)", borderRadius: 16, padding: 12 },
+  noticeTitle: { fontSize: 15, fontWeight: "800", color: "#FFFFFF" },
+  noticeText: { marginTop: 4, fontSize: 12, color: "#EAF7FF", lineHeight: 16 },
+  previewCard: { marginTop: 12, backgroundColor: "#F8FAFC", borderRadius: 18, padding: 12 },
+  previewTitle: { fontSize: 12, fontWeight: "700", color: "#64748B" },
+  previewName: { marginTop: 4, fontSize: 16, fontWeight: "800", color: "#0F172A" },
+  previewMeta: { marginTop: 4, fontSize: 12, color: "#475569" },
   statusRow: { marginTop: 14, flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" },
   statusLabel: { flex: 1, minWidth: 140, fontSize: 14, fontWeight: "700", color: "#FDFDFD" },
   statusPill: { borderRadius: 999, paddingHorizontal: 12, minHeight: 30, alignItems: "center", justifyContent: "center" },
   statusPillOpen: { backgroundColor: "#16A34A" },
   statusPillClosed: { backgroundColor: "#DC2626" },
+  statusPillDraft: { backgroundColor: "#64748B" },
   statusPillText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800" },
   statusSwitchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginLeft: "auto" },
   statusSwitchText: { fontSize: 12, fontWeight: "700", color: "#E2F4FF" },
+  statusHelperText: { width: "100%", fontSize: 11, color: "#E2F4FF", marginTop: 4 },
   ghostButton: { borderWidth: 1, borderColor: "rgba(255,255,255,0.6)", borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8 },
   ghostButtonText: { fontSize: 12, color: "#FFFFFF", fontWeight: "700" },
   loadingWrap: { marginTop: 20, backgroundColor: "#F8FAFC", borderRadius: 20, padding: 20, alignItems: "center" },
@@ -1892,9 +2160,11 @@ const styles = StyleSheet.create({
   errorText: { marginTop: 10, color: "#B00020", fontSize: 12, lineHeight: 16 },
   successText: { marginTop: 10, color: "#0A8F43", fontSize: 12, lineHeight: 16 },
   card: { marginTop: 14, backgroundColor: "#F8FAFC", borderRadius: 20, padding: 14 },
+  cardDisabled: { opacity: 0.6 },
   cardTitle: { fontSize: 19, fontWeight: "800", color: "#0F172A", marginBottom: 4 },
   cardHint: { marginBottom: 8, fontSize: 12, color: "#475569" },
   fieldLabel: { marginTop: 8, fontSize: 12, fontWeight: "700", color: "#334155" },
+  requiredHint: { marginTop: 4, fontSize: 11, color: "#64748B" },
   input: { marginTop: 6, borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 12, minHeight: 46, paddingHorizontal: 12, fontSize: 14, color: "#0F172A", backgroundColor: "#FFFFFF" },
   multilineInput: { minHeight: 72, textAlignVertical: "top", paddingVertical: 10 },
   twoColumn: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
@@ -1965,6 +2235,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 16,
   },
+  dialogContainer: { flex: 1, justifyContent: "center" },
   dialogCard: {
     backgroundColor: "#F8FAFC",
     borderRadius: 18,
@@ -1972,11 +2243,23 @@ const styles = StyleSheet.create({
     maxHeight: "88%",
   },
   dialogCardBody: { paddingBottom: 6 },
+  dialogCardBodyWithFooter: { paddingBottom: 96 },
+  dialogStickyBar: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    bottom: 24,
+    flexDirection: "row",
+    gap: 8,
+  },
   dialogActions: { marginTop: 12, flexDirection: "row", gap: 8 },
   dialogPrimaryButton: { marginTop: 0 },
   statusChip: { paddingHorizontal: 10, minHeight: 30, borderRadius: 999, backgroundColor: "#EEF2FF", justifyContent: "center", alignItems: "center" },
   statusChipText: { fontSize: 11, color: "#3730A3", fontWeight: "700", textTransform: "uppercase" },
+  stepPill: { alignSelf: "flex-start", backgroundColor: "#DBF4FF", color: "#0B6394", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, fontSize: 11, fontWeight: "700", marginBottom: 8 },
+  previewImage: { marginTop: 8, height: 120, borderRadius: 14, width: "100%", backgroundColor: "#E2E8F0" },
   centerCard: { marginTop: 30, marginHorizontal: 16, borderRadius: 20, backgroundColor: "#F8FAFC", padding: 18 },
   centerTitle: { fontSize: 20, fontWeight: "800", color: "#0F172A" },
   centerText: { marginTop: 8, fontSize: 14, color: "#475569", lineHeight: 20 },
 });
+

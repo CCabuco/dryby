@@ -610,12 +610,6 @@ export default function LaundryShopScreen() {
                 <Text style={styles.reviewGateText}>
                   You can leave a review after you complete a transaction with this shop.
                 </Text>
-                <TouchableOpacity
-                  style={styles.reviewGateButton}
-                  onPress={() => router.push("/(tabs)/transactions")}
-                >
-                  <Text style={styles.reviewGateButtonText}>View transactions</Text>
-                </TouchableOpacity>
               </View>
             ) : (
               <View style={styles.reviewEditorCard}>

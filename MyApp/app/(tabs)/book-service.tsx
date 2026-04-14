@@ -26,6 +26,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { LocationPickerModal } from "../../components/location-picker-modal";
 import { setGuestMode } from "../../lib/app-state";
 import { addItemToCart } from "../../lib/cart-state";
 import { auth, db } from "../../lib/firebase";
@@ -61,6 +62,19 @@ type BookingAddress = {
   zipCode: string;
   country: string;
 };
+
+type SavedAddressEntry = {
+  id: string;
+  label: string;
+  fields: BookingAddress;
+  coordinates: { latitude: number; longitude: number } | null;
+};
+
+function getCoordinateSummary(coordinates: { latitude: number; longitude: number } | null): string {
+  return coordinates
+    ? `${coordinates.latitude.toFixed(6)}, ${coordinates.longitude.toFixed(6)}`
+    : "No map pin selected yet.";
+}
 
 type ProvinceConfig = {
   province: string;
@@ -351,6 +365,17 @@ export default function BookServiceScreen() {
   const [addressMode, setAddressMode] = useState<AddressMode>("new");
   const [savedAddress, setSavedAddress] = useState("");
   const [savedPhoneNumber, setSavedPhoneNumber] = useState("");
+  const [savedAddresses, setSavedAddresses] = useState<SavedAddressEntry[]>([]);
+  const [selectedSavedAddressId, setSelectedSavedAddressId] = useState<string | null>(null);
+  const [savedCoordinates, setSavedCoordinates] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const [selectedCoordinates, setSelectedCoordinates] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [isLoadingSavedAddress, setIsLoadingSavedAddress] = useState(false);
   const [loadCategory, setLoadCategory] = useState<LoadCategory | "">("");
   const [selectedLoadServiceIds, setSelectedLoadServiceIds] = useState<string[]>([]);
@@ -374,7 +399,7 @@ export default function BookServiceScreen() {
   const [shopServices, setShopServices] = useState<LaundryService[]>([]);
   const [isLoadingShop, setIsLoadingShop] = useState(true);
 
-  const hasSavedAddress = !!savedAddress.trim();
+  const hasSavedAddress = savedAddresses.length > 0 || !!savedAddress.trim();
   const useSavedAddress = addressMode === "saved";
 
   const resolvedServiceType: ServiceType = selectedServiceType || "standard";
@@ -580,6 +605,10 @@ export default function BookServiceScreen() {
         if (isMounted) {
           setSavedAddress("");
           setSavedPhoneNumber("");
+          setSavedCoordinates(null);
+          setSelectedCoordinates(null);
+          setSavedAddresses([]);
+          setSelectedSavedAddressId(null);
           setAddressMode("new");
         }
         return;
@@ -595,21 +624,87 @@ export default function BookServiceScreen() {
         if (!userSnap.exists()) {
           setSavedAddress("");
           setSavedPhoneNumber("");
+          setSavedCoordinates(null);
+          setSelectedCoordinates(null);
+          setSavedAddresses([]);
+          setSelectedSavedAddressId(null);
           setAddressMode("new");
           return;
         }
 
-        const data = userSnap.data() as { address?: string; mobileNumber?: string };
-        const nextSavedAddress = (data.address ?? "").trim();
+        const data = userSnap.data() as {
+          address?: string;
+          mobileNumber?: string;
+          addressFields?: { latitude?: number; longitude?: number };
+          addresses?: Array<{
+            id?: string;
+            label?: string;
+            fields?: Partial<BookingAddress> & {
+              latitude?: number | null;
+              longitude?: number | null;
+            };
+          }>;
+          primaryAddressId?: string;
+        };
         const nextSavedPhone = (data.mobileNumber ?? "").trim();
+        let nextSavedAddress = (data.address ?? "").trim();
+        let nextSavedCoordinates =
+          typeof data.addressFields?.latitude === "number" &&
+          typeof data.addressFields?.longitude === "number"
+            ? {
+                latitude: data.addressFields.latitude,
+                longitude: data.addressFields.longitude,
+              }
+            : null;
 
+        const nextEntries: SavedAddressEntry[] = Array.isArray(data.addresses)
+          ? data.addresses
+              .map((entry) => {
+                const fields = entry.fields ?? {};
+                const normalized: BookingAddress = {
+                  houseUnit: (fields.houseUnit ?? "").trim(),
+                  streetName: (fields.streetName ?? "").trim(),
+                  barangay: (fields.barangay ?? "").trim(),
+                  province: (fields.province ?? "").trim(),
+                  cityMunicipality: (fields.cityMunicipality ?? "").trim(),
+                  zipCode: (fields.zipCode ?? "").trim(),
+                  country: (fields.country ?? "Philippines").trim() || "Philippines",
+                };
+                const coords =
+                  typeof fields.latitude === "number" && typeof fields.longitude === "number"
+                    ? { latitude: fields.latitude, longitude: fields.longitude }
+                    : null;
+                const id = entry.id ?? `addr-${Math.random()}`;
+                const label = entry.label ?? "Address";
+                return { id, label, fields: normalized, coordinates: coords };
+              })
+              .filter((entry) => !!entry.fields.houseUnit || !!entry.fields.streetName)
+          : [];
+
+        if (nextEntries.length) {
+          const primaryId = data.primaryAddressId ?? nextEntries[0].id;
+          const primaryEntry = nextEntries.find((entry) => entry.id === primaryId) ?? nextEntries[0];
+          nextSavedAddress = buildAddressLabel(primaryEntry.fields);
+          nextSavedCoordinates = primaryEntry.coordinates;
+          setSelectedSavedAddressId(primaryEntry.id);
+        } else {
+          setSelectedSavedAddressId(null);
+        }
+
+        setSavedAddresses(nextEntries);
         setSavedAddress(nextSavedAddress);
         setSavedPhoneNumber(nextSavedPhone);
+        setSavedCoordinates(nextSavedCoordinates);
+        setSelectedCoordinates(nextSavedCoordinates);
         setAddressMode(nextSavedAddress ? "saved" : "new");
       } catch {
         if (isMounted) {
           setSavedAddress("");
           setSavedPhoneNumber("");
+          setSavedCoordinates(null);
+          setSelectedCoordinates(null);
+          setSavedAddresses([]);
+          setSelectedSavedAddressId(null);
           setAddressMode("new");
         }
       } finally {
@@ -912,6 +1007,8 @@ export default function BookServiceScreen() {
       cityMunicipality: cityMunicipality.trim(),
       zipCode: zipCode.trim(),
       country: country.trim(),
+      latitude: selectedCoordinates?.latitude ?? null,
+      longitude: selectedCoordinates?.longitude ?? null,
     };
 
     if (useSavedAddress) {
@@ -1012,16 +1109,44 @@ export default function BookServiceScreen() {
     if (!useSavedAddress && userId) {
       const formattedAddress = buildAddressLabel(trimmedAddress);
       try {
+        if (savedAddresses.length >= 5) {
+          setErrorMessage("You can save up to 5 addresses only.");
+          return;
+        }
+
+        const newEntry: SavedAddressEntry = {
+          id: `addr-${Date.now()}`,
+          label: `Address ${savedAddresses.length + 1}`,
+          fields: trimmedAddress,
+          coordinates: selectedCoordinates,
+        };
+        const nextEntries = [...savedAddresses, newEntry];
+
         await setDoc(
           doc(db, "users", userId),
           {
+            addresses: nextEntries.map((entry) => ({
+              id: entry.id,
+              label: entry.label,
+              fields: {
+                ...entry.fields,
+                ...(entry.coordinates ?? {}),
+              },
+            })),
+            primaryAddressId: newEntry.id,
             address: formattedAddress,
-            addressFields: trimmedAddress,
+            addressFields: {
+              ...trimmedAddress,
+              ...(selectedCoordinates ?? {}),
+            },
             updatedAt: serverTimestamp(),
           },
           { merge: true }
         );
+        setSavedAddresses(nextEntries);
+        setSelectedSavedAddressId(newEntry.id);
         setSavedAddress(formattedAddress);
+        setSavedCoordinates(selectedCoordinates);
         savedNotice = " New address saved to your account.";
       } catch {
         setErrorMessage("Booking is ready, but we could not save your address. Please try again.");
@@ -1054,6 +1179,7 @@ export default function BookServiceScreen() {
       const customerAddress = useSavedAddress
         ? savedAddress
         : buildAddressLabel(trimmedAddress);
+      const customerCoordinates = useSavedAddress ? savedCoordinates : selectedCoordinates;
 
       const orderPayload = {
         customerUid: userId,
@@ -1070,6 +1196,8 @@ export default function BookServiceScreen() {
         shopId: selectedShop.id,
         shopName: selectedShop.shopName,
         customerAddress,
+        ...(customerCoordinates ? { customerCoordinates } : {}),
+        ...(useSavedAddress ? {} : { customerAddressFields: trimmedAddress }),
         status: "new",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -1433,7 +1561,10 @@ export default function BookServiceScreen() {
                       (!hasSavedAddress || isLoadingSavedAddress) && styles.addressModeButtonDisabled,
                     ]}
                     disabled={!hasSavedAddress || isLoadingSavedAddress}
-                    onPress={() => setAddressMode("saved")}
+                    onPress={() => {
+                      setAddressMode("saved");
+                      setSelectedCoordinates(savedCoordinates);
+                    }}
                   >
                     <Text
                       style={[
@@ -1465,11 +1596,37 @@ export default function BookServiceScreen() {
 
                 {useSavedAddress ? (
                   <View style={styles.savedAddressCard}>
-                    <Text style={styles.savedAddressLabel}>Saved Address</Text>
-                    <Text style={styles.savedAddressValue}>{savedAddress}</Text>
+                    <Text style={styles.savedAddressLabel}>Saved Addresses</Text>
+                    {savedAddresses.length ? (
+                      savedAddresses.map((entry) => (
+                        <TouchableOpacity
+                          key={entry.id}
+                          style={[
+                            styles.savedAddressOption,
+                            selectedSavedAddressId === entry.id && styles.savedAddressOptionActive,
+                          ]}
+                          onPress={() => {
+                            setSelectedSavedAddressId(entry.id);
+                            setSavedAddress(buildAddressLabel(entry.fields));
+                            setSavedCoordinates(entry.coordinates);
+                            setSelectedCoordinates(entry.coordinates);
+                          }}
+                        >
+                          <Text style={styles.savedAddressOptionTitle}>{entry.label}</Text>
+                          <Text style={styles.savedAddressOptionText}>
+                            {buildAddressLabel(entry.fields)}
+                          </Text>
+                        </TouchableOpacity>
+                      ))
+                    ) : (
+                      <Text style={styles.savedAddressValue}>{savedAddress}</Text>
+                    )}
                     {!!savedPhoneNumber && (
                       <Text style={styles.savedAddressMeta}>Phone: {savedPhoneNumber}</Text>
                     )}
+                    <Text style={styles.savedAddressMeta}>
+                      Pin: {getCoordinateSummary(savedCoordinates)}
+                    </Text>
                     <Text style={styles.savedAddressHint}>
                       Need changes? Update your details in Account.
                     </Text>
@@ -1546,6 +1703,21 @@ export default function BookServiceScreen() {
                     <Text style={styles.label}>Country</Text>
                     <View style={styles.readonlyField}>
                       <Text style={styles.readonlyText}>{country}</Text>
+                    </View>
+
+                    <Text style={styles.label}>Map Pin</Text>
+                    <View style={styles.savedAddressCard}>
+                      <Text style={styles.savedAddressValue}>
+                        {getCoordinateSummary(selectedCoordinates)}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.mapActionButton}
+                        onPress={() => setIsLocationPickerOpen(true)}
+                      >
+                        <Text style={styles.mapActionButtonText}>
+                          {selectedCoordinates ? "Update Pin on Map" : "Add Pin on Map"}
+                        </Text>
+                      </TouchableOpacity>
                     </View>
                   </>
                 )}
@@ -1793,6 +1965,19 @@ export default function BookServiceScreen() {
           </View>
         </View>
       </Modal>
+
+      <LocationPickerModal
+        visible={isLocationPickerOpen}
+        title="Set Pickup Pin"
+        initialCoordinates={selectedCoordinates}
+        onClose={() => setIsLocationPickerOpen(false)}
+        onSave={(coordinates) => {
+          setSelectedCoordinates(coordinates);
+          setIsLocationPickerOpen(false);
+          setErrorMessage("");
+          setSuccessMessage("Pickup pin updated.");
+        }}
+      />
     </LinearGradient>
   );
 }
@@ -2181,6 +2366,29 @@ const styles = StyleSheet.create({
     color: "#0B6394",
     fontWeight: "800",
   },
+  savedAddressOption: {
+    marginTop: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#D1E3F5",
+    backgroundColor: "#FFFFFF",
+    padding: 10,
+  },
+  savedAddressOptionActive: {
+    borderColor: "#1BA2EC",
+    backgroundColor: "rgba(27, 162, 236, 0.08)",
+  },
+  savedAddressOptionTitle: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  savedAddressOptionText: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 16,
+    color: "#475569",
+  },
   savedAddressValue: {
     marginTop: 4,
     fontSize: 13,
@@ -2198,6 +2406,19 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 11,
     color: "#64748B",
+  },
+  mapActionButton: {
+    marginTop: 10,
+    alignSelf: "flex-start",
+    borderRadius: 12,
+    backgroundColor: "#DCEFFD",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  mapActionButtonText: {
+    color: "#0B6394",
+    fontSize: 12,
+    fontWeight: "800",
   },
   row: {
     flexDirection: "row",
