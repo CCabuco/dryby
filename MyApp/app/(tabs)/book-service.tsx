@@ -389,6 +389,7 @@ export default function BookServiceScreen() {
   const [dropdownType, setDropdownType] = useState<DropdownType | null>(null);
   const [calendarField, setCalendarField] = useState<CalendarField | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(firstDayOfMonth(today));
+  const [addressStep, setAddressStep] = useState(1);
 
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
@@ -401,6 +402,7 @@ export default function BookServiceScreen() {
 
   const hasSavedAddress = savedAddresses.length > 0 || !!savedAddress.trim();
   const useSavedAddress = addressMode === "saved";
+  const totalAddressSteps = 7;
 
   const resolvedServiceType: ServiceType = selectedServiceType || "standard";
   const serviceTitle =
@@ -521,6 +523,42 @@ export default function BookServiceScreen() {
     return [];
   }, [dropdownType, selectedProvinceData]);
 
+  const canAdvanceAddressStep = (step: number): boolean => {
+    if (step === 1) {
+      return !!houseUnit.trim();
+    }
+    if (step === 2) {
+      return !!streetName.trim();
+    }
+    if (step === 3) {
+      return !!barangay.trim();
+    }
+    if (step === 4) {
+      return !!province.trim() && !!cityMunicipality.trim();
+    }
+    if (step === 5) {
+      return zipCode.trim().length === 4;
+    }
+    if (step === 6) {
+      return !!country.trim();
+    }
+    return true;
+  };
+
+  const goToNextAddressStep = () => {
+    if (!canAdvanceAddressStep(addressStep)) {
+      setErrorMessage("Please complete this field before moving on.");
+      return;
+    }
+    setErrorMessage("");
+    setAddressStep((prev) => Math.min(prev + 1, totalAddressSteps));
+  };
+
+  const goToPreviousAddressStep = () => {
+    setErrorMessage("");
+    setAddressStep((prev) => Math.max(prev - 1, 1));
+  };
+
   React.useEffect(() => {
     let isMounted = true;
 
@@ -595,6 +633,12 @@ export default function BookServiceScreen() {
       isMounted = false;
     };
   }, [parsedShopId]);
+
+  React.useEffect(() => {
+    if (addressMode === "saved") {
+      setAddressStep(1);
+    }
+  }, [addressMode]);
 
   React.useEffect(() => {
     let isMounted = true;
@@ -1633,91 +1677,143 @@ export default function BookServiceScreen() {
                   </View>
                 ) : (
                   <>
-                    <Text style={styles.label}>House/Unit/Building Number</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="123, Unit 4B, Sunrise Apartments"
-                      placeholderTextColor="#9AA4B2"
-                      value={houseUnit}
-                      onChangeText={setHouseUnit}
-                    />
+                    <Text style={styles.stepPill}>Step {addressStep} of {totalAddressSteps}</Text>
 
-                    <Text style={styles.label}>Street Name</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Rizal Street"
-                      placeholderTextColor="#9AA4B2"
-                      value={streetName}
-                      onChangeText={setStreetName}
-                    />
+                    {addressStep === 1 ? (
+                      <>
+                        <Text style={styles.label}>What is the house, unit, or building number?</Text>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="123, Unit 4B, Sunrise Apartments"
+                          placeholderTextColor="#9AA4B2"
+                          value={houseUnit}
+                          onChangeText={setHouseUnit}
+                        />
+                      </>
+                    ) : null}
 
-                    <Text style={styles.label}>Barangay</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Barangay San Roque"
-                      placeholderTextColor="#9AA4B2"
-                      value={barangay}
-                      onChangeText={setBarangay}
-                    />
+                    {addressStep === 2 ? (
+                      <>
+                        <Text style={styles.label}>What is the street name?</Text>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Rizal Street"
+                          placeholderTextColor="#9AA4B2"
+                          value={streetName}
+                          onChangeText={setStreetName}
+                        />
+                      </>
+                    ) : null}
 
-                    <Text style={styles.label}>Province</Text>
-                    <TouchableOpacity
-                      style={styles.inputButton}
-                      onPress={() => setDropdownType("province")}
-                    >
-                      <Text style={[styles.inputButtonText, !province && styles.placeholderText]}>
-                        {province || "Select province"}
-                      </Text>
-                      <Ionicons name="chevron-down" size={18} color="#64748B" />
-                    </TouchableOpacity>
+                    {addressStep === 3 ? (
+                      <>
+                        <Text style={styles.label}>What is the barangay?</Text>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Barangay San Roque"
+                          placeholderTextColor="#9AA4B2"
+                          value={barangay}
+                          onChangeText={setBarangay}
+                        />
+                      </>
+                    ) : null}
 
-                    <Text style={styles.label}>City / Municipality</Text>
-                    <TouchableOpacity
-                      style={styles.inputButton}
-                      onPress={() => setDropdownType("city")}
-                      disabled={!province}
-                    >
-                      <Text
-                        style={[
-                          styles.inputButtonText,
-                          !cityMunicipality && styles.placeholderText,
-                          !province && styles.disabledText,
-                        ]}
-                      >
-                        {cityMunicipality || (province ? "Select city/municipality" : "Select province first")}
-                      </Text>
-                      <Ionicons name="chevron-down" size={18} color="#64748B" />
-                    </TouchableOpacity>
+                    {addressStep === 4 ? (
+                      <>
+                        <Text style={styles.label}>Which province is this in?</Text>
+                        <TouchableOpacity
+                          style={styles.inputButton}
+                          onPress={() => setDropdownType("province")}
+                        >
+                          <Text style={[styles.inputButtonText, !province && styles.placeholderText]}>
+                            {province || "Select province"}
+                          </Text>
+                          <Ionicons name="chevron-down" size={18} color="#64748B" />
+                        </TouchableOpacity>
 
-                    <Text style={styles.label}>ZIP Code</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="4000"
-                      placeholderTextColor="#9AA4B2"
-                      keyboardType="number-pad"
-                      maxLength={4}
-                      value={zipCode}
-                      onChangeText={(value) => setZipCode(value.replace(/\D/g, ""))}
-                    />
+                        <Text style={styles.label}>What is the city or municipality?</Text>
+                        <TouchableOpacity
+                          style={styles.inputButton}
+                          onPress={() => setDropdownType("city")}
+                          disabled={!province}
+                        >
+                          <Text
+                            style={[
+                              styles.inputButtonText,
+                              !cityMunicipality && styles.placeholderText,
+                              !province && styles.disabledText,
+                            ]}
+                          >
+                            {cityMunicipality ||
+                              (province ? "Select city/municipality" : "Select province first")}
+                          </Text>
+                          <Ionicons name="chevron-down" size={18} color="#64748B" />
+                        </TouchableOpacity>
+                      </>
+                    ) : null}
 
-                    <Text style={styles.label}>Country</Text>
-                    <View style={styles.readonlyField}>
-                      <Text style={styles.readonlyText}>{country}</Text>
-                    </View>
+                    {addressStep === 5 ? (
+                      <>
+                        <Text style={styles.label}>What is the ZIP code?</Text>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="4000"
+                          placeholderTextColor="#9AA4B2"
+                          keyboardType="number-pad"
+                          maxLength={4}
+                          value={zipCode}
+                          onChangeText={(value) => setZipCode(value.replace(/\D/g, ""))}
+                        />
+                      </>
+                    ) : null}
 
-                    <Text style={styles.label}>Map Pin</Text>
-                    <View style={styles.savedAddressCard}>
-                      <Text style={styles.savedAddressValue}>
-                        {getCoordinateSummary(selectedCoordinates)}
-                      </Text>
+                    {addressStep === 6 ? (
+                      <>
+                        <Text style={styles.label}>What country is this address in?</Text>
+                        <View style={styles.readonlyField}>
+                          <Text style={styles.readonlyText}>{country}</Text>
+                        </View>
+                      </>
+                    ) : null}
+
+                    {addressStep === 7 ? (
+                      <>
+                        <Text style={styles.label}>Where should we drop the pin on the map?</Text>
+                        <View style={styles.savedAddressCard}>
+                          <Text style={styles.savedAddressValue}>
+                            {getCoordinateSummary(selectedCoordinates)}
+                          </Text>
+                          <TouchableOpacity
+                            style={styles.mapActionButton}
+                            onPress={() => setIsLocationPickerOpen(true)}
+                          >
+                            <Text style={styles.mapActionButtonText}>
+                              {selectedCoordinates ? "Update Pin on Map" : "Add Pin on Map"}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </>
+                    ) : null}
+
+                    <View style={styles.addressStepControls}>
                       <TouchableOpacity
-                        style={styles.mapActionButton}
-                        onPress={() => setIsLocationPickerOpen(true)}
+                        style={[
+                          styles.stepButton,
+                          addressStep === 1 && styles.stepButtonDisabled,
+                        ]}
+                        disabled={addressStep === 1}
+                        onPress={goToPreviousAddressStep}
                       >
-                        <Text style={styles.mapActionButtonText}>
-                          {selectedCoordinates ? "Update Pin on Map" : "Add Pin on Map"}
-                        </Text>
+                        <Text style={styles.stepButtonText}>Back</Text>
                       </TouchableOpacity>
+                      {addressStep < totalAddressSteps ? (
+                        <TouchableOpacity
+                          style={styles.stepButtonPrimary}
+                          onPress={goToNextAddressStep}
+                        >
+                          <Text style={styles.stepButtonPrimaryText}>Next</Text>
+                        </TouchableOpacity>
+                      ) : null}
                     </View>
                   </>
                 )}

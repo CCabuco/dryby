@@ -28,6 +28,38 @@ type TransactionItem = {
   deliveryDate: string;
 };
 
+const STATUS_FLOW = ["new", "accepted", "washing", "ready", "out_for_delivery", "completed"];
+
+function statusDisplayLabel(status: string): string {
+  const normalized = status.replace(/[_-]/g, " ").trim().toLowerCase();
+  const readable = normalized
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word[0]?.toUpperCase() + word.slice(1))
+    .join(" ");
+  return readable || "Pending";
+}
+
+function statusDescription(status: string): string {
+  const normalized = status.replace(/[_-]/g, " ").trim().toLowerCase();
+  switch (normalized) {
+    case "new":
+      return "We received your order.";
+    case "accepted":
+      return "Shop accepted your laundry.";
+    case "washing":
+      return "Washing your clothes.";
+    case "ready":
+      return "Laundry is ready for pickup.";
+    case "out for delivery":
+      return "Out for delivery.";
+    case "completed":
+      return "Order completed.";
+    default:
+      return `Current status: ${statusDisplayLabel(status)}`;
+  }
+}
+
 export default function TransactionsScreen() {
   const [user, setUser] = useState<User | null>(auth.currentUser);
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
@@ -99,6 +131,15 @@ export default function TransactionsScreen() {
   }, [user]);
 
   const hasTransactions = useMemo(() => transactions.length > 0, [transactions.length]);
+  const statusFlow = STATUS_FLOW;
+  const currentStatusIndex = useMemo(() => {
+    if (!selectedTransaction?.status) {
+      return 0;
+    }
+    const normalized = selectedTransaction.status.trim().toLowerCase();
+    const index = statusFlow.findIndex((status) => status === normalized);
+    return index === -1 ? 0 : index;
+  }, [selectedTransaction, statusFlow]);
 
   return (
     <LinearGradient colors={["#55B7E9", "#2E95D3"]} style={styles.container}>
@@ -159,43 +200,128 @@ export default function TransactionsScreen() {
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Transaction Details</Text>
-            <Text style={styles.modalLabel}>Shop</Text>
-            <Text style={styles.modalValue}>
-              {selectedTransaction?.shopName || "Laundry Shop"}
-            </Text>
-            <Text style={styles.modalLabel}>Service Type</Text>
-            <Text style={styles.modalValue}>
-              {selectedTransaction?.serviceType || "Standard"}
-            </Text>
-            <Text style={styles.modalLabel}>Load</Text>
-            <Text style={styles.modalValue}>
-              {selectedTransaction?.loadCategory || "Load"}
-            </Text>
-            <Text style={styles.modalLabel}>Selected Services</Text>
-            <Text style={styles.modalValue}>
-              {selectedTransaction?.selectedServices?.length
-                ? selectedTransaction.selectedServices.join(" + ")
-                : "Not specified"}
-            </Text>
-            <Text style={styles.modalLabel}>Pickup Date</Text>
-            <Text style={styles.modalValue}>
-              {selectedTransaction?.pickupDate || "Not set"}
-            </Text>
-            <Text style={styles.modalLabel}>Delivery Date</Text>
-            <Text style={styles.modalValue}>
-              {selectedTransaction?.deliveryDate || "Not set"}
-            </Text>
-            <Text style={styles.modalLabel}>Amount</Text>
-            <Text style={styles.modalValue}>{selectedTransaction?.amount || "Amount pending"}</Text>
-            <Text style={styles.modalLabel}>Status</Text>
-            <Text style={styles.modalValue}>{selectedTransaction?.status || "Pending"}</Text>
 
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setSelectedTransaction(null)}
-            >
-              <Text style={styles.modalCloseText}>Close</Text>
-            </TouchableOpacity>
+            <View style={styles.modalSection}>
+              <Text style={styles.modalSectionTitle}>Shop</Text>
+              <Text style={styles.modalSectionValue}>
+                {selectedTransaction?.shopName || "Laundry Shop"}
+              </Text>
+            </View>
+
+            <View style={styles.modalSection}>
+              <Text style={styles.modalSectionTitle}>Service Details</Text>
+              <View style={styles.modalRow}>
+                <Text style={styles.modalRowLabel}>Service type</Text>
+                <Text style={styles.modalRowValue}>
+                  {selectedTransaction?.serviceType || "Standard"}
+                </Text>
+              </View>
+              <View style={styles.modalRow}>
+                <Text style={styles.modalRowLabel}>Load type</Text>
+                <Text style={styles.modalRowValue}>
+                  {selectedTransaction?.loadCategory || "Load"}
+                </Text>
+              </View>
+              <View style={styles.modalRow}>
+                <Text style={styles.modalRowLabel}>Selected services</Text>
+                <Text style={styles.modalRowValue}>
+                  {selectedTransaction?.selectedServices?.length
+                    ? selectedTransaction.selectedServices.join(" + ")
+                    : "Not specified"}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.modalSection}>
+              <Text style={styles.modalSectionTitle}>Schedule</Text>
+              <View style={styles.modalRow}>
+                <Text style={styles.modalRowLabel}>Pickup date</Text>
+                <Text style={styles.modalRowValue}>
+                  {selectedTransaction?.pickupDate || "Not set"}
+                </Text>
+              </View>
+              <View style={styles.modalRow}>
+                <Text style={styles.modalRowLabel}>Delivery date</Text>
+                <Text
+                  style={[
+                    styles.modalRowValue,
+                    !selectedTransaction?.deliveryDate && styles.subtleText,
+                  ]}
+                >
+                  {selectedTransaction?.deliveryDate || "Not yet scheduled"}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.modalSection}>
+              <Text style={styles.modalSectionTitle}>Pricing</Text>
+              <Text style={styles.modalSectionValue}>
+                {selectedTransaction?.amount || "Amount pending"}
+              </Text>
+            </View>
+
+            <View style={styles.modalSection}>
+              <Text style={styles.modalSectionTitle}>Progress Status</Text>
+              <Text style={styles.modalStatusLabel}>
+                Current status: {statusDescription(selectedTransaction?.status || "new")}
+              </Text>
+              <View style={styles.stepperRow}>
+                {statusFlow.map((status, index) => {
+                  const isCompleted = index < currentStatusIndex;
+                  const isActive = index === currentStatusIndex;
+                  return (
+                    <View key={status} style={styles.stepperSegment}>
+                      <View
+                        style={[
+                          styles.stepCircle,
+                          isCompleted && styles.stepCircleComplete,
+                          isActive && styles.stepCircleActive,
+                        ]}
+                      >
+                        {isCompleted ? (
+                          <Ionicons name=\"checkmark\" size={14} color=\"#fff\" />
+                        ) : (
+                          <Text
+                            style={[
+                              styles.stepIndex,
+                              isActive && styles.stepIndexActive,
+                            ]}
+                          >
+                            {index + 1}
+                          </Text>
+                        )}
+                      </View>
+                      {index < statusFlow.length - 1 && (
+                        <View
+                          style={[
+                            styles.stepConnector,
+                            isCompleted && styles.stepConnectorComplete,
+                          ]}
+                        />
+                      )}
+                      <Text
+                        style={[
+                          styles.stepLabel,
+                          isActive && styles.stepLabelActive,
+                          isCompleted && styles.stepLabelComplete,
+                        ]}
+                      >
+                        {statusDisplayLabel(status)}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={styles.modalActionRow}>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setSelectedTransaction(null)}
+              >
+                <Text style={styles.modalCloseText}>Close</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -290,38 +416,137 @@ const styles = StyleSheet.create({
   modalCard: {
     width: "100%",
     maxWidth: 420,
-    backgroundColor: "#fff",
-    borderRadius: 20,
-    padding: 20,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    padding: 18,
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
   },
   modalTitle: {
     fontSize: 18,
     fontWeight: "800",
     color: "#0F172A",
+    marginBottom: 14,
+  },
+  modalSection: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 12,
+  },
+  modalSectionTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#0F172A",
     marginBottom: 8,
   },
-  modalLabel: {
+  modalSectionValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  modalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 10,
+    marginBottom: 6,
+  },
+  modalRowLabel: {
+    fontSize: 12,
+    color: "#64748B",
+    flex: 1,
+  },
+  modalRowValue: {
     fontSize: 12,
     fontWeight: "700",
-    color: "#64748B",
-    marginTop: 10,
-  },
-  modalValue: {
-    fontSize: 14,
-    fontWeight: "600",
     color: "#0F172A",
-    marginTop: 2,
+    flex: 1,
+    textAlign: "right",
+  },
+  subtleText: {
+    color: "#94A3B8",
+    fontWeight: "600",
+  },
+  modalStatusLabel: {
+    fontSize: 12,
+    color: "#334155",
+    marginBottom: 10,
+    fontWeight: "600",
+  },
+  stepperRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  stepperSegment: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  stepCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+  },
+  stepCircleComplete: {
+    backgroundColor: "#22C55E",
+    borderColor: "#22C55E",
+  },
+  stepCircleActive: {
+    borderColor: "#1BA2EC",
+    backgroundColor: "#EAF6FF",
+  },
+  stepIndex: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#64748B",
+  },
+  stepIndexActive: {
+    color: "#0B6394",
+  },
+  stepConnector: {
+    width: 18,
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: "#CBD5E1",
+    marginHorizontal: 6,
+  },
+  stepConnectorComplete: {
+    backgroundColor: "#22C55E",
+  },
+  stepLabel: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#94A3B8",
+    marginRight: 6,
+  },
+  stepLabelActive: {
+    color: "#0B6394",
+  },
+  stepLabelComplete: {
+    color: "#16A34A",
+  },
+  modalActionRow: {
+    marginTop: 4,
   },
   modalCloseButton: {
-    marginTop: 16,
-    borderRadius: 12,
+    borderRadius: 16,
     backgroundColor: "#F4C430",
-    paddingVertical: 12,
+    paddingVertical: 10,
     alignItems: "center",
   },
   modalCloseText: {
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "800",
     color: "#111827",
   },
 });

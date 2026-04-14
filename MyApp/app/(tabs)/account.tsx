@@ -1359,7 +1359,7 @@ export default function AccountScreen() {
                             <Text style={styles.stepPill}>Step {addressStep} of {totalAddressSteps}</Text>
                             {addressStep === 1 ? (
                               <>
-                                <Text style={styles.fieldLabel}>Address Label</Text>
+                                <Text style={styles.fieldLabel}>What will be the address label?</Text>
                                 <TextInput
                                   style={styles.addressFieldInput}
                                   placeholder="Home, Work, etc."
@@ -1375,7 +1375,7 @@ export default function AccountScreen() {
 
                             {addressStep === 2 ? (
                               <>
-                                <Text style={styles.fieldLabel}>House/Unit/Building Number</Text>
+                                <Text style={styles.fieldLabel}>What is the house, unit, or building number?</Text>
                                 <TextInput
                                   style={styles.addressFieldInput}
                                   placeholder="123, Unit 4B, Sunrise Apartments"
@@ -1391,7 +1391,7 @@ export default function AccountScreen() {
 
                             {addressStep === 3 ? (
                               <>
-                                <Text style={styles.fieldLabel}>Street Name</Text>
+                                <Text style={styles.fieldLabel}>What is the street name?</Text>
                                 <TextInput
                                   style={styles.addressFieldInput}
                                   placeholder="Rizal Street"
@@ -1407,7 +1407,7 @@ export default function AccountScreen() {
 
                             {addressStep === 4 ? (
                               <>
-                                <Text style={styles.fieldLabel}>Barangay</Text>
+                                <Text style={styles.fieldLabel}>What is the barangay?</Text>
                                 <TextInput
                                   style={styles.addressFieldInput}
                                   placeholder="Barangay San Roque"
@@ -1424,7 +1424,7 @@ export default function AccountScreen() {
                             {addressStep === 5 ? (
                               <View style={styles.fieldRow}>
                                 <View style={styles.halfField}>
-                                  <Text style={styles.fieldLabel}>City / Municipality</Text>
+                                  <Text style={styles.fieldLabel}>What is the city or municipality?</Text>
                                   <TouchableOpacity
                                     style={styles.inputButton}
                                     onPress={() => setDropdownType("city")}
@@ -1447,7 +1447,7 @@ export default function AccountScreen() {
                                 </View>
 
                                 <View style={styles.halfField}>
-                                  <Text style={styles.fieldLabel}>Province</Text>
+                                  <Text style={styles.fieldLabel}>Which province is this in?</Text>
                                   <TouchableOpacity
                                     style={styles.inputButton}
                                     onPress={() => setDropdownType("province")}
@@ -1469,7 +1469,7 @@ export default function AccountScreen() {
                             {addressStep === 6 ? (
                               <View style={styles.fieldRow}>
                                 <View style={styles.halfField}>
-                                  <Text style={styles.fieldLabel}>ZIP Code</Text>
+                                  <Text style={styles.fieldLabel}>What is the ZIP code?</Text>
                                   <TextInput
                                     style={styles.addressFieldInput}
                                     placeholder="4000"
@@ -1485,7 +1485,7 @@ export default function AccountScreen() {
                                 </View>
 
                                 <View style={styles.halfField}>
-                                  <Text style={styles.fieldLabel}>Country</Text>
+                                  <Text style={styles.fieldLabel}>What country is this address in?</Text>
                                   <TextInput
                                     style={styles.addressFieldInput}
                                     placeholder="Philippines"
@@ -1502,7 +1502,7 @@ export default function AccountScreen() {
 
                             {addressStep === 7 ? (
                               <>
-                                <Text style={styles.fieldLabel}>Pin Location</Text>
+                                <Text style={styles.fieldLabel}>Where should we drop the pin on the map?</Text>
                                 <Text style={styles.helperText}>{locationSummary}</Text>
                                 <View style={styles.pinButtonRow}>
                                   <TouchableOpacity
