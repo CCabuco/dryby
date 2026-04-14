@@ -59,15 +59,24 @@ type ManagedOrder = {
   customerUid: string;
   customerName: string;
   customerNameDisplay: string;
+  customerEmail: string;
+  customerAddress: string;
+  customerCoordinates?: { latitude: number; longitude: number };
   serviceType: string;
+  loadCategory: string;
+  selectedServices: string[];
   pickupDate: string;
+  pickupWindow: string;
+  deliveryDate: string;
   totalAmount: string;
   status: string;
   isDemo: boolean;
+  createdAt?: string;
 };
 
 type ServiceActionState = Record<LaundryAction, boolean>;
 type ProfileEditorSection = "basic" | "address" | "operations" | "services" | "branding";
+type DropdownType = "province" | "city";
 
 const ORDER_STATUSES = ["new", "accepted", "processing", "ready", "completed"];
 const WEEKDAY_OPTIONS: DayKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri"];
@@ -77,6 +86,141 @@ const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
   const minutes = index % 2 === 0 ? "00" : "30";
   return `${String(hours).padStart(2, "0")}:${minutes}`;
 });
+const PH_LOCATIONS = [
+  {
+    province: "Laguna",
+    municipalities: [
+      "Alaminos",
+      "Bay",
+      "Binan City",
+      "Cabuyao City",
+      "Calamba City",
+      "Calauan",
+      "Cavinti",
+      "Famy",
+      "Kalayaan",
+      "Liliw",
+      "Los Banos",
+      "Luisiana",
+      "Lumban",
+      "Mabitac",
+      "Magdalena",
+      "Majayjay",
+      "Nagcarlan",
+      "Paete",
+      "Pagsanjan",
+      "Pakil",
+      "Pangil",
+      "Pila",
+      "Rizal",
+      "San Pablo City",
+      "San Pedro City",
+      "Santa Cruz",
+      "Santa Maria",
+      "Santa Rosa City",
+      "Siniloan",
+      "Victoria",
+    ],
+  },
+  {
+    province: "Bulacan",
+    municipalities: [
+      "Angat",
+      "Balagtas",
+      "Baliwag",
+      "Bocaue",
+      "Bulakan",
+      "Bustos",
+      "Calumpit",
+      "Dona Remedios Trinidad",
+      "Guiguinto",
+      "Hagonoy",
+      "Malolos City",
+      "Marilao",
+      "Meycauayan City",
+      "Norzagaray",
+      "Obando",
+      "Pandi",
+      "Paombong",
+      "Plaridel",
+      "Pulilan",
+      "San Ildefonso",
+      "San Jose del Monte City",
+      "San Miguel",
+      "San Rafael",
+      "Santa Maria",
+    ],
+  },
+  {
+    province: "Cavite",
+    municipalities: [
+      "Alfonso",
+      "Amadeo",
+      "Bacoor City",
+      "Carmona",
+      "Cavite City",
+      "Dasmarinas City",
+      "General Emilio Aguinaldo",
+      "General Mariano Alvarez",
+      "General Trias City",
+      "Imus City",
+      "Indang",
+      "Kawit",
+      "Magallanes",
+      "Maragondon",
+      "Mendez",
+      "Naic",
+      "Noveleta",
+      "Rosario",
+      "Silang",
+      "Tagaytay City",
+      "Tanza",
+      "Ternate",
+      "Trece Martires City",
+    ],
+  },
+  {
+    province: "Rizal",
+    municipalities: [
+      "Angono",
+      "Antipolo City",
+      "Baras",
+      "Binangonan",
+      "Cainta",
+      "Cardona",
+      "Jalajala",
+      "Morong",
+      "Pililla",
+      "Rodriguez",
+      "San Mateo",
+      "Tanay",
+      "Taytay",
+      "Teresa",
+    ],
+  },
+  {
+    province: "Metro Manila",
+    municipalities: [
+      "Caloocan",
+      "Las Pinas",
+      "Makati",
+      "Malabon",
+      "Mandaluyong",
+      "Manila",
+      "Marikina",
+      "Muntinlupa",
+      "Navotas",
+      "Paranaque",
+      "Pasay",
+      "Pasig",
+      "Pateros",
+      "Quezon City",
+      "San Juan",
+      "Taguig",
+      "Valenzuela",
+    ],
+  },
+];
 
 const DEFAULT_SERVICE_ACTIONS: ServiceActionState = {
   wash: true,
@@ -238,6 +382,8 @@ export default function ShopManagementScreen() {
   const [isServiceCatalogOpen, setIsServiceCatalogOpen] = useState(false);
   const [isServiceDialogOpen, setIsServiceDialogOpen] = useState(false);
   const [isBookingsOpen, setIsBookingsOpen] = useState(false);
+  const [isBookingDetailsOpen, setIsBookingDetailsOpen] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<ManagedOrder | null>(null);
   const [isBookingDialogOpen, setIsBookingDialogOpen] = useState(false);
   const [bookingEditorId, setBookingEditorId] = useState<string | null>(null);
   const [bookingCustomerName, setBookingCustomerName] = useState("");
@@ -245,6 +391,8 @@ export default function ShopManagementScreen() {
   const [bookingPickupDate, setBookingPickupDate] = useState("");
   const [bookingTotalAmount, setBookingTotalAmount] = useState("");
   const [bookingStatus, setBookingStatus] = useState("new");
+  const [addressStep, setAddressStep] = useState(1);
+  const [addressDropdownType, setAddressDropdownType] = useState<DropdownType | null>(null);
   const hasShop = !!shopId;
   const hasUnsavedChanges = useMemo(() => {
     if (!shopDraft || !shopBase) return false;
@@ -294,12 +442,18 @@ export default function ShopManagementScreen() {
     clearMessages();
     setProfileEditBackup(cloneShopDraft(shopDraft));
     setActiveProfileEditor(section);
+    if (section === "address") {
+      setAddressStep(1);
+      setAddressDropdownType(null);
+    }
   };
 
   const cancelProfileEditor = async () => {
     if (!hasShop) {
       setProfileEditBackup(null);
       setActiveProfileEditor(null);
+      setAddressStep(1);
+      setAddressDropdownType(null);
       router.replace("/(tabs)/account");
       return;
     }
@@ -317,6 +471,8 @@ export default function ShopManagementScreen() {
     }
     setProfileEditBackup(null);
     setActiveProfileEditor(null);
+    setAddressStep(1);
+    setAddressDropdownType(null);
   };
 
   const setOperatingDays = (days: DayKey[]) => {
@@ -518,6 +674,10 @@ export default function ShopManagementScreen() {
               const data = item.data() as Record<string, unknown>;
               const currentName = String(data.customerNameCurrent ?? data.customerName ?? "Customer");
               const previousName = String(data.customerNamePrevious ?? "");
+              const createdAt =
+                data.createdAt && typeof data.createdAt === "object" && typeof (data.createdAt as any).toDate === "function"
+                  ? (data.createdAt as any).toDate().toISOString()
+                  : "";
               return {
                 id: item.id,
                 customerUid: String(data.customerUid ?? ""),
@@ -526,13 +686,32 @@ export default function ShopManagementScreen() {
                   previousName && previousName !== currentName
                     ? `${previousName} -> ${currentName}`
                     : currentName,
+                customerEmail: String(data.customerEmail ?? ""),
+                customerAddress: String(data.customerAddress ?? ""),
+                customerCoordinates:
+                  data.customerCoordinates &&
+                  typeof data.customerCoordinates === "object" &&
+                  typeof (data.customerCoordinates as any).latitude === "number" &&
+                  typeof (data.customerCoordinates as any).longitude === "number"
+                    ? {
+                        latitude: (data.customerCoordinates as any).latitude,
+                        longitude: (data.customerCoordinates as any).longitude,
+                      }
+                    : undefined,
                 serviceType: String(data.serviceType ?? "Standard"),
+                loadCategory: String(data.loadCategory ?? "Not set"),
+                selectedServices: Array.isArray(data.selectedServices)
+                  ? (data.selectedServices as unknown[]).map((entry) => String(entry))
+                  : [],
                 pickupDate: String(data.pickupDate ?? "No date"),
+                pickupWindow: String(data.pickupWindow ?? ""),
+                deliveryDate: String(data.deliveryDate ?? ""),
                 totalAmount: String(data.totalAmount ?? "P0"),
                 status: String(data.status ?? "new"),
                 isDemo:
                   data.isDemo === true ||
                   String(data.customerNameCurrent ?? data.customerName ?? "").trim() === "Sample Customer",
+                createdAt,
               };
             })
           );
@@ -564,6 +743,98 @@ export default function ShopManagementScreen() {
     }
     return "No map pin saved yet.";
   }, [shopDraft]);
+
+  const openBookingDetails = (order: ManagedOrder) => {
+    setSelectedOrder(order);
+    setIsBookingDetailsOpen(true);
+  };
+
+  const closeBookingDetails = () => {
+    setIsBookingDetailsOpen(false);
+    setSelectedOrder(null);
+  };
+  const totalShopAddressSteps = 6;
+  const dropdownOptions = useMemo(() => {
+    if (!shopDraft || !addressDropdownType) {
+      return [];
+    }
+    if (addressDropdownType === "province") {
+      return PH_LOCATIONS.map((item) => item.province);
+    }
+    const selectedProvince = shopDraft.addressFields.province.trim();
+    const provinceEntry = PH_LOCATIONS.find((item) => item.province === selectedProvince);
+    return provinceEntry?.municipalities ?? [];
+  }, [shopDraft, addressDropdownType]);
+
+  const canAdvanceAddressStep = () => {
+    if (!shopDraft) {
+      return false;
+    }
+    if (addressStep === 1) {
+      return !!shopDraft.addressFields.houseUnit.trim();
+    }
+    if (addressStep === 2) {
+      return !!shopDraft.addressFields.streetName.trim();
+    }
+    if (addressStep === 3) {
+      return !!shopDraft.addressFields.barangay.trim();
+    }
+    if (addressStep === 4) {
+      return (
+        !!shopDraft.addressFields.province.trim() &&
+        !!shopDraft.addressFields.cityMunicipality.trim()
+      );
+    }
+    if (addressStep === 5) {
+      return /^\d{4}$/.test(shopDraft.addressFields.zipCode.trim());
+    }
+    return true;
+  };
+
+  const goToNextAddressStep = () => {
+    if (!canAdvanceAddressStep()) {
+      setErrorText("Please complete this field before continuing.");
+      return;
+    }
+    setErrorText("");
+    setAddressStep((previous) => Math.min(previous + 1, totalShopAddressSteps));
+  };
+
+  const goToPreviousAddressStep = () => {
+    setErrorText("");
+    setAddressStep((previous) => Math.max(previous - 1, 1));
+  };
+
+  const handlePickDropdownValue = (value: string) => {
+    if (!shopDraft || !addressDropdownType) {
+      return;
+    }
+
+    if (addressDropdownType === "province") {
+      const provinceEntry = PH_LOCATIONS.find((item) => item.province === value);
+      const nextCity = provinceEntry?.municipalities.includes(shopDraft.addressFields.cityMunicipality)
+        ? shopDraft.addressFields.cityMunicipality
+        : "";
+      updateShop((previous) => ({
+        ...previous,
+        addressFields: {
+          ...previous.addressFields,
+          province: value,
+          cityMunicipality: nextCity,
+        },
+      }));
+    } else {
+      updateShop((previous) => ({
+        ...previous,
+        addressFields: {
+          ...previous.addressFields,
+          cityMunicipality: value,
+        },
+      }));
+    }
+
+    setAddressDropdownType(null);
+  };
 
   const handleShopField = (field: keyof LaundryShop, value: LaundryShop[keyof LaundryShop]) => {
     updateShop((previous) => ({ ...previous, [field]: value }));
@@ -1609,6 +1880,9 @@ export default function ShopManagementScreen() {
                     <View style={styles.statusChip}>
                       <Text style={styles.statusChipText}>{order.status}</Text>
                     </View>
+                    <TouchableOpacity style={styles.smallButton} onPress={() => openBookingDetails(order)}>
+                      <Text style={styles.smallButtonText}>View Details</Text>
+                    </TouchableOpacity>
                     {isBookingsOpen ? (
                       <>
                         <TouchableOpacity style={[styles.smallButton, styles.smallButtonOn]} onPress={() => void updateOrderStatus(order)}>
@@ -1676,48 +1950,164 @@ export default function ShopManagementScreen() {
 
               {activeProfileEditor === "address" ? (
                 <>
-                  <Text style={styles.fieldLabel}>House/Unit/Building *</Text>
-                  <TextInput style={styles.input} value={shopDraft.addressFields.houseUnit} onChangeText={(value) => handleAddressField("houseUnit", value)} />
-                  <Text style={styles.requiredHint}>Required</Text>
-                  <Text style={styles.fieldLabel}>Street *</Text>
-                  <TextInput style={styles.input} value={shopDraft.addressFields.streetName} onChangeText={(value) => handleAddressField("streetName", value)} />
-                  <Text style={styles.requiredHint}>Required</Text>
-                  <Text style={styles.fieldLabel}>Barangay *</Text>
-                  <TextInput style={styles.input} value={shopDraft.addressFields.barangay} onChangeText={(value) => handleAddressField("barangay", value)} />
-                  <Text style={styles.requiredHint}>Required</Text>
-                  <View style={styles.twoColumn}>
-                    <View style={styles.columnItem}>
-                      <Text style={styles.fieldLabel}>City / Municipality *</Text>
-                      <TextInput style={styles.input} value={shopDraft.addressFields.cityMunicipality} onChangeText={(value) => handleAddressField("cityMunicipality", value)} />
+                  <Text style={styles.stepPill}>Step {addressStep} of {totalShopAddressSteps}</Text>
+
+                  {addressStep === 1 ? (
+                    <>
+                      <Text style={styles.fieldLabel}>House/Unit/Building *</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={shopDraft.addressFields.houseUnit}
+                        onChangeText={(value) => handleAddressField("houseUnit", value)}
+                      />
                       <Text style={styles.requiredHint}>Required</Text>
-                    </View>
-                    <View style={styles.columnItem}>
-                      <Text style={styles.fieldLabel}>Province *</Text>
-                      <TextInput style={styles.input} value={shopDraft.addressFields.province} onChangeText={(value) => handleAddressField("province", value)} />
+                    </>
+                  ) : null}
+
+                  {addressStep === 2 ? (
+                    <>
+                      <Text style={styles.fieldLabel}>Street *</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={shopDraft.addressFields.streetName}
+                        onChangeText={(value) => handleAddressField("streetName", value)}
+                      />
                       <Text style={styles.requiredHint}>Required</Text>
+                    </>
+                  ) : null}
+
+                  {addressStep === 3 ? (
+                    <>
+                      <Text style={styles.fieldLabel}>Barangay *</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={shopDraft.addressFields.barangay}
+                        onChangeText={(value) => handleAddressField("barangay", value)}
+                      />
+                      <Text style={styles.requiredHint}>Required</Text>
+                    </>
+                  ) : null}
+
+                  {addressStep === 4 ? (
+                    <View style={styles.twoColumn}>
+                      <View style={styles.columnItem}>
+                        <Text style={styles.fieldLabel}>Province *</Text>
+                        <TouchableOpacity
+                          style={styles.inputButton}
+                          onPress={() => setAddressDropdownType("province")}
+                        >
+                          <Text
+                            style={[
+                              styles.inputButtonText,
+                              !shopDraft.addressFields.province && styles.placeholderText,
+                            ]}
+                          >
+                            {shopDraft.addressFields.province || "Select province"}
+                          </Text>
+                          <Text style={styles.dropdownChevron}>▾</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.requiredHint}>Required</Text>
+                      </View>
+                      <View style={styles.columnItem}>
+                        <Text style={styles.fieldLabel}>City / Municipality *</Text>
+                        <TouchableOpacity
+                          style={[
+                            styles.inputButton,
+                            !shopDraft.addressFields.province && styles.inputButtonDisabled,
+                          ]}
+                          disabled={!shopDraft.addressFields.province}
+                          onPress={() => setAddressDropdownType("city")}
+                        >
+                          <Text
+                            style={[
+                              styles.inputButtonText,
+                              !shopDraft.addressFields.cityMunicipality && styles.placeholderText,
+                              !shopDraft.addressFields.province && styles.disabledText,
+                            ]}
+                          >
+                            {shopDraft.addressFields.cityMunicipality || "Select city"}
+                          </Text>
+                          <Text style={styles.dropdownChevron}>▾</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.requiredHint}>Required</Text>
+                      </View>
                     </View>
+                  ) : null}
+
+                  {addressStep === 5 ? (
+                    <View style={styles.twoColumn}>
+                      <View style={styles.columnItem}>
+                        <Text style={styles.fieldLabel}>ZIP Code *</Text>
+                        <TextInput
+                          style={styles.input}
+                          value={shopDraft.addressFields.zipCode}
+                          keyboardType="number-pad"
+                          onChangeText={(value) =>
+                            handleAddressField("zipCode", value.replace(/\D/g, "").slice(0, 4))
+                          }
+                        />
+                        <Text style={styles.requiredHint}>Required</Text>
+                      </View>
+                      <View style={styles.columnItem}>
+                        <Text style={styles.fieldLabel}>Country</Text>
+                        <TextInput
+                          style={[styles.input, styles.readOnlyInput]}
+                          value={shopDraft.addressFields.country || "Philippines"}
+                          editable={false}
+                        />
+                      </View>
+                    </View>
+                  ) : null}
+
+                  {addressStep === 6 ? (
+                    <>
+                      <Text style={styles.fieldLabel}>Pin Location</Text>
+                      <Text style={styles.cardHint}>{shopLocationSummary}</Text>
+                      <View style={styles.pinButtonRow}>
+                        <TouchableOpacity
+                          style={[styles.smallButton, styles.profileActionButton]}
+                          onPress={() => setIsLocationPickerOpen(true)}
+                        >
+                          <Text style={styles.smallButtonText}>
+                            {shopDraft.addressFields.latitude && shopDraft.addressFields.longitude
+                              ? "Update Pin on Map"
+                              : "Add Pin on Map"}
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.clearPinButton}
+                          onPress={() =>
+                            updateShop((previous) => ({
+                              ...previous,
+                              addressFields: {
+                                ...previous.addressFields,
+                                latitude: null,
+                                longitude: null,
+                              },
+                            }))
+                          }
+                        >
+                          <Text style={styles.clearPinButtonText}>Clear Pin</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <Text style={styles.cardHint}>Country is automatically set to Philippines.</Text>
+                    </>
+                  ) : null}
+
+                  <View style={styles.addressStepControls}>
+                    <TouchableOpacity
+                      style={[styles.stepButton, addressStep === 1 && styles.stepButtonDisabled]}
+                      disabled={addressStep === 1}
+                      onPress={goToPreviousAddressStep}
+                    >
+                      <Text style={styles.stepButtonText}>Back</Text>
+                    </TouchableOpacity>
+                    {addressStep < totalShopAddressSteps ? (
+                      <TouchableOpacity style={styles.stepButtonPrimary} onPress={goToNextAddressStep}>
+                        <Text style={styles.stepButtonPrimaryText}>Next</Text>
+                      </TouchableOpacity>
+                    ) : null}
                   </View>
-                  <Text style={styles.fieldLabel}>ZIP Code *</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={shopDraft.addressFields.zipCode}
-                    keyboardType="number-pad"
-                    onChangeText={(value) => handleAddressField("zipCode", value.replace(/\D/g, "").slice(0, 4))}
-                  />
-                  <Text style={styles.requiredHint}>Required</Text>
-                  <Text style={styles.fieldLabel}>Pin Location</Text>
-                  <Text style={styles.cardHint}>{shopLocationSummary}</Text>
-                  <TouchableOpacity
-                    style={[styles.smallButton, styles.profileActionButton]}
-                    onPress={() => setIsLocationPickerOpen(true)}
-                  >
-                    <Text style={styles.smallButtonText}>
-                      {shopDraft.addressFields.latitude && shopDraft.addressFields.longitude
-                        ? "Update Pin on Map"
-                        : "Add Pin on Map"}
-                    </Text>
-                  </TouchableOpacity>
-                  <Text style={styles.cardHint}>Country is automatically set to Philippines.</Text>
                 </>
               ) : null}
 
@@ -1889,8 +2279,14 @@ export default function ShopManagementScreen() {
                   <Text style={styles.secondaryButtonText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.primaryButton, styles.flexButton, styles.dialogPrimaryButton, isSavingShop && styles.buttonDisabled]}
-                  disabled={isSavingShop}
+                  style={[
+                    styles.primaryButton,
+                    styles.flexButton,
+                    styles.dialogPrimaryButton,
+                    isSavingShop && styles.buttonDisabled,
+                    activeProfileEditor === "address" && addressStep < totalShopAddressSteps && styles.buttonDisabled,
+                  ]}
+                  disabled={isSavingShop || (activeProfileEditor === "address" && addressStep < totalShopAddressSteps)}
                   onPress={() => void saveActiveProfileEditor()}
                 >
                   <Text style={styles.primaryButtonText}>
@@ -1898,6 +2294,44 @@ export default function ShopManagementScreen() {
                   </Text>
                 </TouchableOpacity>
               </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          transparent
+          visible={addressDropdownType !== null}
+          animationType="fade"
+          onRequestClose={() => setAddressDropdownType(null)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>
+                {addressDropdownType === "province" ? "Choose Province" : "Choose City / Municipality"}
+              </Text>
+
+              <ScrollView style={styles.optionList}>
+                {dropdownOptions.map((item) => (
+                  <TouchableOpacity
+                    key={item}
+                    style={styles.optionRow}
+                    onPress={() => handlePickDropdownValue(item)}
+                  >
+                    <Text style={styles.optionRowText}>{item}</Text>
+                  </TouchableOpacity>
+                ))}
+
+                {!dropdownOptions.length && (
+                  <Text style={styles.emptyOptionText}>No options available.</Text>
+                )}
+              </ScrollView>
+
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setAddressDropdownType(null)}
+              >
+                <Text style={styles.modalCloseText}>Close</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </Modal>
@@ -2008,6 +2442,114 @@ export default function ShopManagementScreen() {
                   <Text style={styles.primaryButtonText}>Save Demo Booking</Text>
                 </TouchableOpacity>
               </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={isBookingDetailsOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={closeBookingDetails}
+        >
+          <View style={styles.dialogBackdrop}>
+            <View style={styles.dialogContainer}>
+              <ScrollView
+                style={styles.dialogCard}
+                contentContainerStyle={styles.dialogCardBody}
+                showsVerticalScrollIndicator={false}
+              >
+                <Text style={styles.cardTitle}>Booking Details</Text>
+                <Text style={styles.cardHint}>Review the full booking information below.</Text>
+
+                {selectedOrder ? (
+                  <>
+                    <View style={styles.detailSection}>
+                      <Text style={styles.detailTitle}>Customer</Text>
+                      <Text style={styles.detailText}>{selectedOrder.customerNameDisplay}</Text>
+                      {!!selectedOrder.customerEmail && (
+                        <Text style={styles.detailSubtext}>{selectedOrder.customerEmail}</Text>
+                      )}
+                    </View>
+
+                    <View style={styles.detailSection}>
+                      <Text style={styles.detailTitle}>Service</Text>
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Type</Text>
+                        <Text style={styles.detailValue}>{selectedOrder.serviceType}</Text>
+                      </View>
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Load</Text>
+                        <Text style={styles.detailValue}>{selectedOrder.loadCategory || "Not set"}</Text>
+                      </View>
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Services</Text>
+                        <Text style={styles.detailValue}>
+                          {selectedOrder.selectedServices.length
+                            ? selectedOrder.selectedServices.join(" + ")
+                            : "Not selected"}
+                        </Text>
+                      </View>
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Total</Text>
+                        <Text style={styles.detailValue}>{selectedOrder.totalAmount}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.detailSection}>
+                      <Text style={styles.detailTitle}>Schedule</Text>
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Pickup Date</Text>
+                        <Text style={styles.detailValue}>{selectedOrder.pickupDate}</Text>
+                      </View>
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Pickup Window</Text>
+                        <Text style={styles.detailValue}>
+                          {selectedOrder.pickupWindow || "Not specified"}
+                        </Text>
+                      </View>
+                      {!!selectedOrder.deliveryDate && (
+                        <View style={styles.detailRow}>
+                          <Text style={styles.detailLabel}>Delivery Date</Text>
+                          <Text style={styles.detailValue}>{selectedOrder.deliveryDate}</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    <View style={styles.detailSection}>
+                      <Text style={styles.detailTitle}>Address</Text>
+                      <Text style={styles.detailText}>
+                        {selectedOrder.customerAddress || "No address provided."}
+                      </Text>
+                      {selectedOrder.customerCoordinates ? (
+                        <Text style={styles.detailSubtext}>
+                          Pin: {selectedOrder.customerCoordinates.latitude.toFixed(5)}, {selectedOrder.customerCoordinates.longitude.toFixed(5)}
+                        </Text>
+                      ) : null}
+                    </View>
+
+                    <View style={styles.detailSection}>
+                      <Text style={styles.detailTitle}>Status</Text>
+                      <View style={styles.statusChipLarge}>
+                        <Text style={styles.statusChipText}>{selectedOrder.status}</Text>
+                      </View>
+                      {!!selectedOrder.createdAt && (
+                        <Text style={styles.detailSubtext}>
+                          Created: {new Date(selectedOrder.createdAt).toLocaleString()}
+                        </Text>
+                      )}
+                    </View>
+                  </>
+                ) : (
+                  <Text style={styles.emptyText}>No booking selected.</Text>
+                )}
+
+                <View style={styles.dialogActions}>
+                  <TouchableOpacity style={[styles.primaryButton, styles.flexButton, styles.dialogPrimaryButton]} onPress={closeBookingDetails}>
+                    <Text style={styles.primaryButtonText}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
             </View>
           </View>
         </Modal>
@@ -2166,6 +2708,24 @@ const styles = StyleSheet.create({
   fieldLabel: { marginTop: 8, fontSize: 12, fontWeight: "700", color: "#334155" },
   requiredHint: { marginTop: 4, fontSize: 11, color: "#64748B" },
   input: { marginTop: 6, borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 12, minHeight: 46, paddingHorizontal: 12, fontSize: 14, color: "#0F172A", backgroundColor: "#FFFFFF" },
+  readOnlyInput: { backgroundColor: "#F1F5F9" },
+  inputButton: {
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 12,
+    minHeight: 46,
+    paddingHorizontal: 12,
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  inputButtonDisabled: { opacity: 0.6 },
+  inputButtonText: { fontSize: 14, color: "#0F172A", fontWeight: "600" },
+  placeholderText: { color: "#94A3B8" },
+  disabledText: { color: "#B4BCC8" },
+  dropdownChevron: { fontSize: 14, color: "#64748B" },
   multilineInput: { minHeight: 72, textAlignVertical: "top", paddingVertical: 10 },
   twoColumn: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
   columnItem: { flex: 1, minWidth: 160 },
@@ -2229,6 +2789,15 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
   secondaryButtonText: { fontSize: 14, fontWeight: "700", color: "#334155" },
+  addressStepControls: { marginTop: 14, flexDirection: "row", justifyContent: "space-between", gap: 10 },
+  stepButton: { flex: 1, borderRadius: 14, borderWidth: 1, borderColor: "#CBD5E1", paddingVertical: 10, alignItems: "center", backgroundColor: "#FFFFFF" },
+  stepButtonDisabled: { opacity: 0.5 },
+  stepButtonText: { fontSize: 12, fontWeight: "800", color: "#334155" },
+  stepButtonPrimary: { flex: 1, borderRadius: 14, backgroundColor: "#F4C430", paddingVertical: 10, alignItems: "center" },
+  stepButtonPrimaryText: { fontSize: 12, fontWeight: "800", color: "#111827" },
+  pinButtonRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8 },
+  clearPinButton: { borderRadius: 12, borderWidth: 1, borderColor: "#F4C430", paddingHorizontal: 12, paddingVertical: 8, backgroundColor: "#FFF7DA" },
+  clearPinButtonText: { fontSize: 12, fontWeight: "800", color: "#B45309" },
   dialogBackdrop: {
     flex: 1,
     backgroundColor: "rgba(2, 6, 23, 0.55)",
@@ -2254,8 +2823,66 @@ const styles = StyleSheet.create({
   },
   dialogActions: { marginTop: 12, flexDirection: "row", gap: 8 },
   dialogPrimaryButton: { marginTop: 0 },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.46)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 18,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    padding: 18,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#0F172A",
+    marginBottom: 12,
+  },
+  optionList: {
+    maxHeight: 260,
+  },
+  optionRow: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+  },
+  optionRowText: {
+    fontSize: 14,
+    color: "#0F172A",
+    fontWeight: "600",
+  },
+  emptyOptionText: {
+    paddingVertical: 16,
+    textAlign: "center",
+    color: "#64748B",
+    fontSize: 12,
+  },
+  modalCloseButton: {
+    marginTop: 14,
+    borderRadius: 14,
+    backgroundColor: "#F4C430",
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  modalCloseText: {
+    fontWeight: "800",
+    color: "#111827",
+  },
   statusChip: { paddingHorizontal: 10, minHeight: 30, borderRadius: 999, backgroundColor: "#EEF2FF", justifyContent: "center", alignItems: "center" },
   statusChipText: { fontSize: 11, color: "#3730A3", fontWeight: "700", textTransform: "uppercase" },
+  statusChipLarge: { alignSelf: "flex-start", marginTop: 6, paddingHorizontal: 12, minHeight: 34, borderRadius: 999, backgroundColor: "#E0F2FE", justifyContent: "center", alignItems: "center" },
+  detailSection: { marginTop: 12, padding: 12, borderRadius: 14, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E2E8F0" },
+  detailTitle: { fontSize: 13, fontWeight: "800", color: "#0F172A", marginBottom: 6 },
+  detailText: { fontSize: 13, color: "#0F172A", lineHeight: 18 },
+  detailSubtext: { marginTop: 6, fontSize: 11, color: "#475569" },
+  detailRow: { flexDirection: "row", justifyContent: "space-between", gap: 10, marginTop: 6 },
+  detailLabel: { fontSize: 12, fontWeight: "700", color: "#64748B" },
+  detailValue: { fontSize: 12, fontWeight: "700", color: "#0F172A", textAlign: "right", flex: 1 },
   stepPill: { alignSelf: "flex-start", backgroundColor: "#DBF4FF", color: "#0B6394", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, fontSize: 11, fontWeight: "700", marginBottom: 8 },
   previewImage: { marginTop: 8, height: 120, borderRadius: 14, width: "100%", backgroundColor: "#E2E8F0" },
   centerCard: { marginTop: 30, marginHorizontal: 16, borderRadius: 20, backgroundColor: "#F8FAFC", padding: 18 },
