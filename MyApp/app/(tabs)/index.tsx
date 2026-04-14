@@ -300,20 +300,19 @@ export default function HomeScreen() {
               </Text>
             )}
           </View>
-        </ScrollView>
-
-        <View style={styles.searchBarWrapper}>
-          <View style={styles.searchBar}>
-            <TextInput
-              placeholder="Search shops or services"
-              placeholderTextColor="rgba(255,255,255,0.82)"
-              style={styles.searchInput}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.9)" />
+          <View style={styles.searchBarWrapper}>
+            <View style={styles.searchBar}>
+              <TextInput
+                placeholder="Search shops or services"
+                placeholderTextColor="rgba(255,255,255,0.82)"
+                style={styles.searchInput}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+              />
+              <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.9)" />
+            </View>
           </View>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -331,7 +330,7 @@ const styles = StyleSheet.create({
   },
 
   scrollContent: {
-    paddingBottom: 108,
+    paddingBottom: 40,
   },
 
   headerRow: {
@@ -571,10 +570,9 @@ const styles = StyleSheet.create({
   },
 
   searchBarWrapper: {
-    position: "absolute",
-    bottom: 78,
-    left: 54,
-    right: 54,
+    marginHorizontal: 28,
+    marginTop: 8,
+    marginBottom: 24,
   },
 
   searchBar: {
