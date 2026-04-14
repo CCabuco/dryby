@@ -64,6 +64,12 @@ service cloud.firestore {
     match /users/{uid} {
       allow read, create, update: if signedIn() && request.auth.uid == uid;
       allow delete: if false;
+
+      // Per-user cached distance snapshots
+      match /shopDistances/{shopId} {
+        allow read, create, update: if signedIn() && request.auth.uid == uid;
+        allow delete: if false;
+      }
     }
 
     // Main shop collection

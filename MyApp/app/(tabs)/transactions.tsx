@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
+import { router } from "expo-router";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { collection, limit, onSnapshot, query, where } from "firebase/firestore";
 import React, { useEffect, useMemo, useState } from "react";
@@ -21,6 +22,7 @@ type TransactionItem = {
   status: string;
   userNameDisplay: string;
   shopName: string;
+  shopId: string;
   serviceType: string;
   loadCategory: string;
   selectedServices: string[];
@@ -111,6 +113,7 @@ export default function TransactionsScreen() {
             status: (data.status as string) || "Pending",
             userNameDisplay,
             shopName: (data.shopName as string) || "Laundry Shop",
+            shopId: (data.shopId as string) || "",
             serviceType: (data.serviceType as string) || "Standard",
             loadCategory: (data.loadCategory as string) || "Load",
             selectedServices: Array.isArray(data.selectedServices)
@@ -315,6 +318,20 @@ export default function TransactionsScreen() {
             </View>
 
             <View style={styles.modalActionRow}>
+              {selectedTransaction?.status?.toLowerCase() === "completed" &&
+              selectedTransaction?.shopId ? (
+                <TouchableOpacity
+                  style={styles.modalSecondaryButton}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/(tabs)/laundry-shop",
+                      params: { shopId: selectedTransaction.shopId },
+                    })
+                  }
+                >
+                  <Text style={styles.modalSecondaryText}>Leave a review</Text>
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity
                 style={styles.modalCloseButton}
                 onPress={() => setSelectedTransaction(null)}
@@ -536,7 +553,23 @@ const styles = StyleSheet.create({
     color: "#16A34A",
   },
   modalActionRow: {
-    marginTop: 4,
+    marginTop: 12,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 10,
+  },
+  modalSecondaryButton: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#1BA2EC",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: "#FFFFFF",
+  },
+  modalSecondaryText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#1BA2EC",
   },
   modalCloseButton: {
     borderRadius: 16,

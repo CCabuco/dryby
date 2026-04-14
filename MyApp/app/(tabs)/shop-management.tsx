@@ -51,6 +51,7 @@ import {
   type LaundryAction,
   type LaundryService,
   type LaundryShop,
+  type LoadCategoryKey,
   type ServiceSpeed,
 } from "../../lib/laundry-shops";
 
@@ -227,6 +228,7 @@ const DEFAULT_SERVICE_ACTIONS: ServiceActionState = {
   dry: true,
   fold: false,
 };
+const SERVICE_LOAD_SCOPES: Array<LoadCategoryKey | "both"> = ["normal", "heavy", "both"];
 
 function isValidImageUrl(value: string): boolean {
   if (!value) return false;
@@ -310,6 +312,7 @@ async function seedDefaultServices(shopId: string): Promise<void> {
       serviceName: "Quick Wash",
       actions: ["wash"],
       serviceSpeed: "both",
+      loadScope: "both",
       pricePerKg: 60,
       estimatedHours: 8,
       enabled: true,
@@ -319,6 +322,7 @@ async function seedDefaultServices(shopId: string): Promise<void> {
       serviceName: "Quick Dry",
       actions: ["dry"],
       serviceSpeed: "both",
+      loadScope: "both",
       pricePerKg: 120,
       estimatedHours: 10,
       enabled: true,
@@ -328,6 +332,7 @@ async function seedDefaultServices(shopId: string): Promise<void> {
       serviceName: "Quick Fold",
       actions: ["fold"],
       serviceSpeed: "standard",
+      loadScope: "normal",
       pricePerKg: 180,
       estimatedHours: 24,
       enabled: true,
@@ -365,6 +370,7 @@ export default function ShopManagementScreen() {
   const [servicePrice, setServicePrice] = useState("60");
   const [serviceEtaHours, setServiceEtaHours] = useState("24");
   const [serviceSpeed, setServiceSpeed] = useState<ServiceSpeed>("both");
+  const [serviceLoadScope, setServiceLoadScope] = useState<LoadCategoryKey | "both">("both");
   const [serviceDescription, setServiceDescription] = useState("");
   const [serviceActions, setServiceActions] = useState<ServiceActionState>(DEFAULT_SERVICE_ACTIONS);
 
@@ -377,6 +383,7 @@ export default function ShopManagementScreen() {
   const [isShopProfileOpen, setIsShopProfileOpen] = useState(false);
   const [activeProfileEditor, setActiveProfileEditor] = useState<ProfileEditorSection | null>(null);
   const [profileEditBackup, setProfileEditBackup] = useState<LaundryShop | null>(null);
+  const todayLabel = useMemo(() => new Date().toISOString().split("T")[0], []);
   const [isLoadDefinitionsOpen, setIsLoadDefinitionsOpen] = useState(false);
   const [isPickupWindowsOpen, setIsPickupWindowsOpen] = useState(false);
   const [isServiceCatalogOpen, setIsServiceCatalogOpen] = useState(false);
@@ -500,6 +507,7 @@ export default function ShopManagementScreen() {
     setServicePrice("60");
     setServiceEtaHours("24");
     setServiceSpeed("both");
+    setServiceLoadScope("both");
     setServiceDescription("");
     setServiceActions(DEFAULT_SERVICE_ACTIONS);
   };
@@ -743,6 +751,15 @@ export default function ShopManagementScreen() {
     }
     return "No map pin saved yet.";
   }, [shopDraft]);
+  const liveOrders = useMemo(() => orders.filter((order) => !order.isDemo), [orders]);
+  const ordersToday = useMemo(
+    () => liveOrders.filter((order) => order.pickupDate === todayLabel).length,
+    [liveOrders, todayLabel]
+  );
+  const activeOrders = useMemo(
+    () => liveOrders.filter((order) => order.status !== "completed").length,
+    [liveOrders]
+  );
 
   const openBookingDetails = (order: ManagedOrder) => {
     setSelectedOrder(order);
@@ -1137,15 +1154,16 @@ export default function ShopManagementScreen() {
 
     setIsSavingService(true);
     try {
-      const payload = {
-        serviceName: normalizedName,
-        pricePerKg,
-        estimatedHours,
-        serviceSpeed,
-        actions: selectedActions,
-        description: serviceDescription.trim(),
-        enabled: true,
-        updatedAt: serverTimestamp(),
+    const payload = {
+      serviceName: normalizedName,
+      pricePerKg,
+      estimatedHours,
+      serviceSpeed,
+      loadScope: serviceLoadScope,
+      actions: selectedActions,
+      description: serviceDescription.trim(),
+      enabled: true,
+      updatedAt: serverTimestamp(),
       };
 
       if (serviceEditorId) {
@@ -1225,6 +1243,7 @@ export default function ShopManagementScreen() {
     setServicePrice(String(service.pricePerKg));
     setServiceEtaHours(String(service.estimatedHours));
     setServiceSpeed(service.serviceSpeed);
+    setServiceLoadScope(service.loadScope ?? "both");
     setServiceDescription(service.description);
     setServiceActions({
       wash: service.actions.includes("wash"),
@@ -1520,6 +1539,26 @@ export default function ShopManagementScreen() {
             ) : (
               <Text style={styles.statusHelperText}>Create a shop to enable this.</Text>
             )}
+          </View>
+
+          <View style={styles.metricsCard}>
+            <Text style={styles.cardTitle}>Shop Insights</Text>
+            <View style={styles.metricsRow}>
+              <View style={styles.metricTile}>
+                <Text style={styles.metricValue}>{ordersToday}</Text>
+                <Text style={styles.metricLabel}>Orders today</Text>
+              </View>
+              <View style={styles.metricTile}>
+                <Text style={styles.metricValue}>{activeOrders}</Text>
+                <Text style={styles.metricLabel}>Active orders</Text>
+              </View>
+              <View style={styles.metricTile}>
+                <Text style={styles.metricValue}>
+                  {shopDraft.ratingAverage ? shopDraft.ratingAverage.toFixed(1) : "0.0"}
+                </Text>
+                <Text style={styles.metricLabel}>Avg rating</Text>
+              </View>
+            </View>
           </View>
 
           <View style={styles.card}>
@@ -1828,7 +1867,10 @@ export default function ShopManagementScreen() {
               services.map((service) => (
                 <View key={service.id} style={styles.listCard}>
                   <Text style={styles.listTitle}>{service.serviceName}</Text>
-                  <Text style={styles.listSubtext}>P{service.pricePerKg}/kg | {service.estimatedHours}h | {service.serviceSpeed.toUpperCase()}</Text>
+                  <Text style={styles.listSubtext}>
+                    P{service.pricePerKg}/kg | {service.estimatedHours}h | {service.serviceSpeed.toUpperCase()} |{" "}
+                    {(service.loadScope ?? "both").toUpperCase()}
+                  </Text>
                   <Text style={styles.listSubtext}>Actions: {service.actions.join(" + ")}</Text>
                   {isServiceCatalogOpen ? (
                     <View style={styles.listActions}>
@@ -1917,7 +1959,7 @@ export default function ShopManagementScreen() {
             <View style={styles.dialogContainer}>
               <ScrollView
                 style={styles.dialogCard}
-                contentContainerStyle={[styles.dialogCardBody, styles.dialogCardBodyWithFooter]}
+                contentContainerStyle={styles.dialogCardBody}
                 showsVerticalScrollIndicator={false}
               >
                 {!hasShop ? <Text style={styles.stepPill}>Step 1 of 3 - Basic Info</Text> : null}
@@ -2273,8 +2315,8 @@ export default function ShopManagementScreen() {
                   ) : null}
                 </>
               ) : null}
-              </ScrollView>
-              <View style={styles.dialogStickyBar}>
+
+              <View style={styles.dialogActions}>
                 <TouchableOpacity style={[styles.secondaryButton, styles.flexButton]} onPress={cancelProfileEditor}>
                   <Text style={styles.secondaryButtonText}>Cancel</Text>
                 </TouchableOpacity>
@@ -2294,6 +2336,7 @@ export default function ShopManagementScreen() {
                   </Text>
                 </TouchableOpacity>
               </View>
+              </ScrollView>
             </View>
           </View>
         </Modal>
@@ -2592,12 +2635,35 @@ export default function ShopManagementScreen() {
                 </View>
               </View>
 
+              <Text style={styles.fieldLabel}>Service speed</Text>
               <View style={styles.toggleRow}>
                 {["standard", "express", "both"].map((type) => {
                   const active = serviceSpeed === type;
                   return (
-                    <TouchableOpacity key={type} style={[styles.toggleButton, active && styles.toggleOn]} onPress={() => setServiceSpeed(type as ServiceSpeed)}>
+                    <TouchableOpacity
+                      key={type}
+                      style={[styles.toggleButton, active && styles.toggleOn]}
+                      onPress={() => setServiceSpeed(type as ServiceSpeed)}
+                    >
                       <Text style={[styles.toggleText, active && styles.toggleTextOn]}>{type.toUpperCase()}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <Text style={styles.fieldLabel}>Show in load</Text>
+              <View style={styles.toggleRow}>
+                {SERVICE_LOAD_SCOPES.map((scope) => {
+                  const active = serviceLoadScope === scope;
+                  return (
+                    <TouchableOpacity
+                      key={scope}
+                      style={[styles.toggleButton, active && styles.toggleOn]}
+                      onPress={() => setServiceLoadScope(scope)}
+                    >
+                      <Text style={[styles.toggleText, active && styles.toggleTextOn]}>
+                        {scope === "both" ? "BOTH LOADS" : `${scope.toUpperCase()} LOAD`}
+                      </Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -2695,6 +2761,37 @@ const styles = StyleSheet.create({
   statusSwitchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginLeft: "auto" },
   statusSwitchText: { fontSize: 12, fontWeight: "700", color: "#E2F4FF" },
   statusHelperText: { width: "100%", fontSize: 11, color: "#E2F4FF", marginTop: 4 },
+  metricsCard: {
+    marginTop: 12,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 18,
+    padding: 14,
+  },
+  metricsRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  metricTile: {
+    flex: 1,
+    minWidth: 90,
+    borderRadius: 14,
+    backgroundColor: "#EAF6FF",
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  metricValue: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  metricLabel: {
+    marginTop: 4,
+    fontSize: 11,
+    color: "#475569",
+    fontWeight: "600",
+  },
   ghostButton: { borderWidth: 1, borderColor: "rgba(255,255,255,0.6)", borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8 },
   ghostButtonText: { fontSize: 12, color: "#FFFFFF", fontWeight: "700" },
   loadingWrap: { marginTop: 20, backgroundColor: "#F8FAFC", borderRadius: 20, padding: 20, alignItems: "center" },
@@ -2812,15 +2909,6 @@ const styles = StyleSheet.create({
     maxHeight: "88%",
   },
   dialogCardBody: { paddingBottom: 6 },
-  dialogCardBodyWithFooter: { paddingBottom: 96 },
-  dialogStickyBar: {
-    position: "absolute",
-    left: 16,
-    right: 16,
-    bottom: 24,
-    flexDirection: "row",
-    gap: 8,
-  },
   dialogActions: { marginTop: 12, flexDirection: "row", gap: 8 },
   dialogPrimaryButton: { marginTop: 0 },
   modalBackdrop: {

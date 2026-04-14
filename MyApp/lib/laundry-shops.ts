@@ -38,6 +38,7 @@ export type LaundryService = {
   serviceName: string;
   actions: LaundryAction[];
   serviceSpeed: ServiceSpeed;
+  loadScope: LoadCategoryKey | "both";
   pricePerKg: number;
   estimatedHours: number;
   enabled: boolean;
@@ -435,11 +436,17 @@ export function buildAddressLabel(address: AddressFields): string {
 export function normalizeLaundryService(id: string, value: unknown): LaundryService {
   const source = toRecord(value);
   const serviceName = safeString(source.serviceName, "Unnamed service") || "Unnamed service";
+  const loadScopeRaw = safeString(source.loadScope, "both").toLowerCase();
+  const loadScope =
+    loadScopeRaw === "normal" || loadScopeRaw === "heavy" || loadScopeRaw === "both"
+      ? (loadScopeRaw as LoadCategoryKey | "both")
+      : "both";
   return {
     id,
     serviceName,
     actions: normalizeActions(source.actions),
     serviceSpeed: normalizeServiceSpeed(source.serviceSpeed, "both"),
+    loadScope,
     pricePerKg: Math.max(0, safeNumber(source.pricePerKg, 0)),
     estimatedHours: Math.max(0, safeNumber(source.estimatedHours, 0)),
     enabled: safeBoolean(source.enabled, true),

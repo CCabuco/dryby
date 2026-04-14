@@ -956,6 +956,7 @@ export default function AccountScreen() {
   const showAddressFields = hasSavedAddress || isAddressEditorOpen;
   const isAnyEditorOpen = isPhoneEditorOpen || isAddressEditorOpen;
   const isGuestOnlyView = guestMode && !user;
+  const isEditingExistingAddress = isAddressEditorOpen && editingAddressId !== null;
   const selectedProvinceData = useMemo(
     () => PH_LOCATIONS.find((item) => item.province === addressFields.province) ?? null,
     [addressFields.province]
@@ -1276,23 +1277,28 @@ export default function AccountScreen() {
                     </View>
 
                     {showPhoneField ? (
-                      <View style={[styles.phoneField, !isPhoneEditorOpen && styles.readOnlyInput]}>
-                        <Text style={styles.phonePrefix}>+63</Text>
-                        <TextInput
-                          style={styles.phoneInput}
-                          placeholder="9XXXXXXXXX"
-                          placeholderTextColor="#9AA4B2"
-                          keyboardType="phone-pad"
-                          maxLength={10}
-                          value={mobileNumber}
-                          editable={isPhoneEditorOpen && !isSaving}
-                          onChangeText={(value) => {
-                            setMobileNumber(value.replace(/\D/g, "").slice(0, 10));
-                            setErrorMessage("");
-                            setSuccessMessage("");
-                          }}
-                        />
-                      </View>
+                      <>
+                        <View style={[styles.phoneField, !isPhoneEditorOpen && styles.readOnlyInput]}>
+                          <Text style={styles.phonePrefix}>+63</Text>
+                          <TextInput
+                            style={styles.phoneInput}
+                            placeholder="9XXXXXXXXX"
+                            placeholderTextColor="#9AA4B2"
+                            keyboardType="phone-pad"
+                            maxLength={10}
+                            value={mobileNumber}
+                            editable={isPhoneEditorOpen && !isSaving}
+                            onChangeText={(value) => {
+                              setMobileNumber(value.replace(/\D/g, "").slice(0, 10));
+                              setErrorMessage("");
+                              setSuccessMessage("");
+                            }}
+                          />
+                        </View>
+                        {isPhoneEditorOpen ? (
+                          <Text style={styles.helperText}>Format: 9XXXXXXXXX (10 digits)</Text>
+                        ) : null}
+                      </>
                     ) : (
                       <Text style={styles.helperText}>No phone number added yet.</Text>
                     )}
@@ -1355,73 +1361,48 @@ export default function AccountScreen() {
                         ) : null}
 
                         {isAddressEditorOpen ? (
-                          <>
-                            <Text style={styles.stepPill}>Step {addressStep} of {totalAddressSteps}</Text>
-                            {addressStep === 1 ? (
-                              <>
-                                <Text style={styles.fieldLabel}>What will be the address label?</Text>
-                                <TextInput
-                                  style={styles.addressFieldInput}
-                                  placeholder="Home, Work, etc."
-                                  placeholderTextColor="#9AA4B2"
-                                  value={addressLabel}
-                                  editable={!isSaving}
-                                  onChangeText={(value) =>
-                                    setAddressLabel(value.replace(/[<>]/g, ""))
-                                  }
-                                />
-                              </>
-                            ) : null}
+                          isEditingExistingAddress ? (
+                            <>
+                              <Text style={styles.fieldLabel}>What will be the address label?</Text>
+                              <TextInput
+                                style={styles.addressFieldInput}
+                                placeholder="Home, Work, etc."
+                                placeholderTextColor="#9AA4B2"
+                                value={addressLabel}
+                                editable={!isSaving}
+                                onChangeText={(value) => setAddressLabel(value.replace(/[<>]/g, ""))}
+                              />
 
-                            {addressStep === 2 ? (
-                              <>
-                                <Text style={styles.fieldLabel}>What is the house, unit, or building number?</Text>
-                                <TextInput
-                                  style={styles.addressFieldInput}
-                                  placeholder="123, Unit 4B, Sunrise Apartments"
-                                  placeholderTextColor="#9AA4B2"
-                                  value={addressFields.houseUnit}
-                                  editable={!isSaving}
-                                  onChangeText={(value) =>
-                                    handleAddressFieldChange("houseUnit", value)
-                                  }
-                                />
-                              </>
-                            ) : null}
+                              <Text style={styles.fieldLabel}>What is the house, unit, or building number?</Text>
+                              <TextInput
+                                style={styles.addressFieldInput}
+                                placeholder="123, Unit 4B, Sunrise Apartments"
+                                placeholderTextColor="#9AA4B2"
+                                value={addressFields.houseUnit}
+                                editable={!isSaving}
+                                onChangeText={(value) => handleAddressFieldChange("houseUnit", value)}
+                              />
 
-                            {addressStep === 3 ? (
-                              <>
-                                <Text style={styles.fieldLabel}>What is the street name?</Text>
-                                <TextInput
-                                  style={styles.addressFieldInput}
-                                  placeholder="Rizal Street"
-                                  placeholderTextColor="#9AA4B2"
-                                  value={addressFields.streetName}
-                                  editable={!isSaving}
-                                  onChangeText={(value) =>
-                                    handleAddressFieldChange("streetName", value)
-                                  }
-                                />
-                              </>
-                            ) : null}
+                              <Text style={styles.fieldLabel}>What is the street name?</Text>
+                              <TextInput
+                                style={styles.addressFieldInput}
+                                placeholder="Rizal Street"
+                                placeholderTextColor="#9AA4B2"
+                                value={addressFields.streetName}
+                                editable={!isSaving}
+                                onChangeText={(value) => handleAddressFieldChange("streetName", value)}
+                              />
 
-                            {addressStep === 4 ? (
-                              <>
-                                <Text style={styles.fieldLabel}>What is the barangay?</Text>
-                                <TextInput
-                                  style={styles.addressFieldInput}
-                                  placeholder="Barangay San Roque"
-                                  placeholderTextColor="#9AA4B2"
-                                  value={addressFields.barangay}
-                                  editable={!isSaving}
-                                  onChangeText={(value) =>
-                                    handleAddressFieldChange("barangay", value)
-                                  }
-                                />
-                              </>
-                            ) : null}
+                              <Text style={styles.fieldLabel}>What is the barangay?</Text>
+                              <TextInput
+                                style={styles.addressFieldInput}
+                                placeholder="Barangay San Roque"
+                                placeholderTextColor="#9AA4B2"
+                                value={addressFields.barangay}
+                                editable={!isSaving}
+                                onChangeText={(value) => handleAddressFieldChange("barangay", value)}
+                              />
 
-                            {addressStep === 5 ? (
                               <View style={styles.fieldRow}>
                                 <View style={styles.halfField}>
                                   <Text style={styles.fieldLabel}>What is the city or municipality?</Text>
@@ -1464,9 +1445,7 @@ export default function AccountScreen() {
                                   </TouchableOpacity>
                                 </View>
                               </View>
-                            ) : null}
 
-                            {addressStep === 6 ? (
                               <View style={styles.fieldRow}>
                                 <View style={styles.halfField}>
                                   <Text style={styles.fieldLabel}>What is the ZIP code?</Text>
@@ -1478,9 +1457,7 @@ export default function AccountScreen() {
                                     maxLength={4}
                                     value={addressFields.zipCode}
                                     editable={!isSaving}
-                                    onChangeText={(value) =>
-                                      handleAddressFieldChange("zipCode", value)
-                                    }
+                                    onChangeText={(value) => handleAddressFieldChange("zipCode", value)}
                                   />
                                 </View>
 
@@ -1492,66 +1469,237 @@ export default function AccountScreen() {
                                     placeholderTextColor="#9AA4B2"
                                     value={addressFields.country}
                                     editable={!isSaving}
-                                    onChangeText={(value) =>
-                                      handleAddressFieldChange("country", value)
-                                    }
+                                    onChangeText={(value) => handleAddressFieldChange("country", value)}
                                   />
                                 </View>
                               </View>
-                            ) : null}
 
-                            {addressStep === 7 ? (
-                              <>
-                                <Text style={styles.fieldLabel}>Where should we drop the pin on the map?</Text>
-                                <Text style={styles.helperText}>{locationSummary}</Text>
-                                <View style={styles.pinButtonRow}>
-                                  <TouchableOpacity
-                                    style={styles.locationButton}
-                                    onPress={() => setIsLocationPickerOpen(true)}
-                                  >
-                                    <Text style={styles.locationButtonText}>
-                                      {addressFields.latitude && addressFields.longitude
-                                        ? "Update Pin on Map"
-                                        : "Add Pin on Map"}
-                                    </Text>
-                                  </TouchableOpacity>
-                                  <TouchableOpacity
-                                    style={styles.clearPinButton}
-                                    onPress={() =>
-                                      setAddressFields((previous) => ({
-                                        ...previous,
-                                        latitude: null,
-                                        longitude: null,
-                                      }))
-                                    }
-                                  >
-                                    <Text style={styles.clearPinButtonText}>Clear Pin</Text>
-                                  </TouchableOpacity>
-                                </View>
-                              </>
-                            ) : null}
-
-                            <View style={styles.addressStepControls}>
-                              <TouchableOpacity
-                                style={[
-                                  styles.stepButton,
-                                  addressStep === 1 && styles.stepButtonDisabled,
-                                ]}
-                                disabled={addressStep === 1}
-                                onPress={goToPreviousAddressStep}
-                              >
-                                <Text style={styles.stepButtonText}>Back</Text>
-                              </TouchableOpacity>
-                              {addressStep < totalAddressSteps ? (
+                              <Text style={styles.fieldLabel}>Where should we drop the pin on the map?</Text>
+                              <Text style={styles.helperText}>{locationSummary}</Text>
+                              <View style={styles.pinButtonRow}>
                                 <TouchableOpacity
-                                  style={styles.stepButtonPrimary}
-                                  onPress={goToNextAddressStep}
+                                  style={styles.locationButton}
+                                  onPress={() => setIsLocationPickerOpen(true)}
                                 >
-                                  <Text style={styles.stepButtonPrimaryText}>Next</Text>
+                                  <Text style={styles.locationButtonText}>
+                                    {addressFields.latitude && addressFields.longitude
+                                      ? "Update Pin on Map"
+                                      : "Add Pin on Map"}
+                                  </Text>
                                 </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={styles.clearPinButton}
+                                  onPress={() =>
+                                    setAddressFields((previous) => ({
+                                      ...previous,
+                                      latitude: null,
+                                      longitude: null,
+                                    }))
+                                  }
+                                >
+                                  <Text style={styles.clearPinButtonText}>Clear Pin</Text>
+                                </TouchableOpacity>
+                              </View>
+                            </>
+                          ) : (
+                            <>
+                              <Text style={styles.stepPill}>Step {addressStep} of {totalAddressSteps}</Text>
+                              {addressStep === 1 ? (
+                                <>
+                                  <Text style={styles.fieldLabel}>What will be the address label?</Text>
+                                  <TextInput
+                                    style={styles.addressFieldInput}
+                                    placeholder="Home, Work, etc."
+                                    placeholderTextColor="#9AA4B2"
+                                    value={addressLabel}
+                                    editable={!isSaving}
+                                    onChangeText={(value) =>
+                                      setAddressLabel(value.replace(/[<>]/g, ""))
+                                    }
+                                  />
+                                </>
                               ) : null}
-                            </View>
-                          </>
+
+                              {addressStep === 2 ? (
+                                <>
+                                  <Text style={styles.fieldLabel}>What is the house, unit, or building number?</Text>
+                                  <TextInput
+                                    style={styles.addressFieldInput}
+                                    placeholder="123, Unit 4B, Sunrise Apartments"
+                                    placeholderTextColor="#9AA4B2"
+                                    value={addressFields.houseUnit}
+                                    editable={!isSaving}
+                                    onChangeText={(value) =>
+                                      handleAddressFieldChange("houseUnit", value)
+                                    }
+                                  />
+                                </>
+                              ) : null}
+
+                              {addressStep === 3 ? (
+                                <>
+                                  <Text style={styles.fieldLabel}>What is the street name?</Text>
+                                  <TextInput
+                                    style={styles.addressFieldInput}
+                                    placeholder="Rizal Street"
+                                    placeholderTextColor="#9AA4B2"
+                                    value={addressFields.streetName}
+                                    editable={!isSaving}
+                                    onChangeText={(value) =>
+                                      handleAddressFieldChange("streetName", value)
+                                    }
+                                  />
+                                </>
+                              ) : null}
+
+                              {addressStep === 4 ? (
+                                <>
+                                  <Text style={styles.fieldLabel}>What is the barangay?</Text>
+                                  <TextInput
+                                    style={styles.addressFieldInput}
+                                    placeholder="Barangay San Roque"
+                                    placeholderTextColor="#9AA4B2"
+                                    value={addressFields.barangay}
+                                    editable={!isSaving}
+                                    onChangeText={(value) =>
+                                      handleAddressFieldChange("barangay", value)
+                                    }
+                                  />
+                                </>
+                              ) : null}
+
+                              {addressStep === 5 ? (
+                                <View style={styles.fieldRow}>
+                                  <View style={styles.halfField}>
+                                    <Text style={styles.fieldLabel}>What is the city or municipality?</Text>
+                                    <TouchableOpacity
+                                      style={styles.inputButton}
+                                      onPress={() => setDropdownType("city")}
+                                      disabled={!addressFields.province}
+                                    >
+                                      <Text
+                                        style={[
+                                          styles.inputButtonText,
+                                          !addressFields.cityMunicipality && styles.placeholderText,
+                                          !addressFields.province && styles.disabledText,
+                                        ]}
+                                      >
+                                        {addressFields.cityMunicipality ||
+                                          (addressFields.province
+                                            ? "Select city/municipality"
+                                            : "Select province first")}
+                                      </Text>
+                                      <Ionicons name="chevron-down" size={18} color="#64748B" />
+                                    </TouchableOpacity>
+                                  </View>
+
+                                  <View style={styles.halfField}>
+                                    <Text style={styles.fieldLabel}>Which province is this in?</Text>
+                                    <TouchableOpacity
+                                      style={styles.inputButton}
+                                      onPress={() => setDropdownType("province")}
+                                    >
+                                      <Text
+                                        style={[
+                                          styles.inputButtonText,
+                                          !addressFields.province && styles.placeholderText,
+                                        ]}
+                                      >
+                                        {addressFields.province || "Select province"}
+                                      </Text>
+                                      <Ionicons name="chevron-down" size={18} color="#64748B" />
+                                    </TouchableOpacity>
+                                  </View>
+                                </View>
+                              ) : null}
+
+                              {addressStep === 6 ? (
+                                <View style={styles.fieldRow}>
+                                  <View style={styles.halfField}>
+                                    <Text style={styles.fieldLabel}>What is the ZIP code?</Text>
+                                    <TextInput
+                                      style={styles.addressFieldInput}
+                                      placeholder="4000"
+                                      placeholderTextColor="#9AA4B2"
+                                      keyboardType="number-pad"
+                                      maxLength={4}
+                                      value={addressFields.zipCode}
+                                      editable={!isSaving}
+                                      onChangeText={(value) =>
+                                        handleAddressFieldChange("zipCode", value)
+                                      }
+                                    />
+                                  </View>
+
+                                  <View style={styles.halfField}>
+                                    <Text style={styles.fieldLabel}>What country is this address in?</Text>
+                                    <TextInput
+                                      style={styles.addressFieldInput}
+                                      placeholder="Philippines"
+                                      placeholderTextColor="#9AA4B2"
+                                      value={addressFields.country}
+                                      editable={!isSaving}
+                                      onChangeText={(value) =>
+                                        handleAddressFieldChange("country", value)
+                                      }
+                                    />
+                                  </View>
+                                </View>
+                              ) : null}
+
+                              {addressStep === 7 ? (
+                                <>
+                                  <Text style={styles.fieldLabel}>Where should we drop the pin on the map?</Text>
+                                  <Text style={styles.helperText}>{locationSummary}</Text>
+                                  <View style={styles.pinButtonRow}>
+                                    <TouchableOpacity
+                                      style={styles.locationButton}
+                                      onPress={() => setIsLocationPickerOpen(true)}
+                                    >
+                                      <Text style={styles.locationButtonText}>
+                                        {addressFields.latitude && addressFields.longitude
+                                          ? "Update Pin on Map"
+                                          : "Add Pin on Map"}
+                                      </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      style={styles.clearPinButton}
+                                      onPress={() =>
+                                        setAddressFields((previous) => ({
+                                          ...previous,
+                                          latitude: null,
+                                          longitude: null,
+                                        }))
+                                      }
+                                    >
+                                      <Text style={styles.clearPinButtonText}>Clear Pin</Text>
+                                    </TouchableOpacity>
+                                  </View>
+                                </>
+                              ) : null}
+
+                              <View style={styles.addressStepControls}>
+                                <TouchableOpacity
+                                  style={[
+                                    styles.stepButton,
+                                    addressStep === 1 && styles.stepButtonDisabled,
+                                  ]}
+                                  disabled={addressStep === 1}
+                                  onPress={goToPreviousAddressStep}
+                                >
+                                  <Text style={styles.stepButtonText}>Back</Text>
+                                </TouchableOpacity>
+                                {addressStep < totalAddressSteps ? (
+                                  <TouchableOpacity
+                                    style={styles.stepButtonPrimary}
+                                    onPress={goToNextAddressStep}
+                                  >
+                                    <Text style={styles.stepButtonPrimaryText}>Next</Text>
+                                  </TouchableOpacity>
+                                ) : null}
+                              </View>
+                            </>
+                          )
                         ) : null}
                       </>
                     ) : (

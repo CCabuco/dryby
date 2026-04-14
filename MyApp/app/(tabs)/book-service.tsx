@@ -455,10 +455,16 @@ export default function BookServiceScreen() {
     () => getServiceSupportMap(shopServices),
     [shopServices]
   );
-  const selectableServices = useMemo(
-    () => shopServices.filter((service) => service.enabled),
-    [shopServices]
-  );
+  const selectableServices = useMemo(() => {
+    const activeServices = shopServices.filter((service) => service.enabled);
+    if (!loadCategory) {
+      return activeServices;
+    }
+    return activeServices.filter((service) => {
+      const scope = service.loadScope ?? "both";
+      return scope === "both" || scope === loadCategory;
+    });
+  }, [shopServices, loadCategory]);
   const selectedLoadServiceNames = useMemo(
     () =>
       selectableServices
@@ -477,37 +483,69 @@ export default function BookServiceScreen() {
   const bookingIsToday = bookingDate === formatYmd(today);
   const availableStandardWindows = useMemo(() => {
     if (!selectedShop) {
-      if (!bookingIsToday) {
-        return STANDARD_WINDOWS;
-      }
       const now = new Date();
       const nowInMinutes = now.getHours() * 60 + now.getMinutes();
-      return STANDARD_WINDOWS.filter((window) => nowInMinutes < window.endHour * 60);
+      return STANDARD_WINDOWS.map((window) => ({
+        ...window,
+        disabled: bookingIsToday && nowInMinutes >= window.endHour * 60,
+      }));
     }
 
     const parsedDate = parseYmd(bookingDate) ?? today;
-    return getVisiblePickupWindows(selectedShop, "standard", parsedDate).map((item) => ({
+    const windows = selectedShop.pickupWindows.filter((window) => {
+      if (!window.enabled) {
+        return false;
+      }
+      if (window.forService === "both") {
+        return true;
+      }
+      return window.forService === "standard";
+    });
+    const now = new Date();
+    const nowInMinutes = now.getHours() * 60 + now.getMinutes();
+    const isToday =
+      now.getFullYear() === parsedDate.getFullYear() &&
+      now.getMonth() === parsedDate.getMonth() &&
+      now.getDate() === parsedDate.getDate();
+    return windows.map((item) => ({
       label: item.label,
       startHour: item.startHour,
       endHour: item.endHour,
+      disabled: isToday && nowInMinutes >= item.endHour * 60,
     }));
   }, [bookingDate, bookingIsToday, selectedShop, today]);
 
   const availableExpressSlots = useMemo(() => {
     if (!selectedShop) {
-      if (!bookingIsToday) {
-        return EXPRESS_SLOTS;
-      }
       const now = new Date();
       const nowInMinutes = now.getHours() * 60 + now.getMinutes();
-      return EXPRESS_SLOTS.filter((slot) => nowInMinutes < slot.endHour * 60);
+      return EXPRESS_SLOTS.map((slot) => ({
+        ...slot,
+        disabled: bookingIsToday && nowInMinutes >= slot.endHour * 60,
+      }));
     }
 
     const parsedDate = parseYmd(bookingDate) ?? today;
-    return getVisiblePickupWindows(selectedShop, "express", parsedDate).map((item) => ({
+    const windows = selectedShop.pickupWindows.filter((window) => {
+      if (!window.enabled) {
+        return false;
+      }
+      if (window.forService === "both") {
+        return true;
+      }
+      return window.forService === "express";
+    });
+    const now = new Date();
+    const nowInMinutes = now.getHours() * 60 + now.getMinutes();
+    const isToday =
+      now.getFullYear() === parsedDate.getFullYear() &&
+      now.getMonth() === parsedDate.getMonth() &&
+      now.getDate() === parsedDate.getDate();
+    return windows.map((item) => ({
       label: item.label,
       startHour: item.startHour,
       endHour: item.endHour,
+      disabled: isToday && nowInMinutes >= item.endHour * 60,
     }));
   }, [bookingDate, bookingIsToday, selectedShop, today]);
 
@@ -1839,13 +1877,16 @@ export default function BookServiceScreen() {
                           style={[
                             styles.chip,
                             selectedStandardWindow === window.label && styles.chipActive,
+                            window.disabled && styles.chipDisabled,
                           ]}
+                          disabled={window.disabled}
                           onPress={() => setSelectedStandardWindow(window.label)}
                         >
                           <Text
                             style={[
                               styles.chipText,
                               selectedStandardWindow === window.label && styles.chipTextActive,
+                              window.disabled && styles.chipTextDisabled,
                             ]}
                           >
                             {window.label}
@@ -1861,6 +1902,7 @@ export default function BookServiceScreen() {
                     <Text style={styles.helperText}>
                       Same-day booking is allowed only before {formatHourLabel(cutoffHour)} cutoff.
                     </Text>
+                    <Text style={styles.helperText}>Past time windows are disabled for today.</Text>
                     <Text style={styles.helperText}>Estimated delivery is within 1-3 days.</Text>
                   </>
                 ) : (
@@ -1906,13 +1948,16 @@ export default function BookServiceScreen() {
                               style={[
                                 styles.chip,
                                 selectedExpressSlot === slot.label && styles.chipActive,
+                                slot.disabled && styles.chipDisabled,
                               ]}
+                              disabled={slot.disabled}
                               onPress={() => setSelectedExpressSlot(slot.label)}
                             >
                               <Text
                                 style={[
                                   styles.chipText,
                                   selectedExpressSlot === slot.label && styles.chipTextActive,
+                                  slot.disabled && styles.chipTextDisabled,
                                 ]}
                               >
                                 {slot.label}
@@ -2402,6 +2447,10 @@ const styles = StyleSheet.create({
     borderColor: "#1BA2EC",
     backgroundColor: "#EAF6FF",
   },
+  chipDisabled: {
+    backgroundColor: "#F1F5F9",
+    borderColor: "#E2E8F0",
+  },
   chipText: {
     fontSize: 12,
     color: "#334155",
@@ -2409,6 +2458,9 @@ const styles = StyleSheet.create({
   },
   chipTextActive: {
     color: "#0B6394",
+  },
+  chipTextDisabled: {
+    color: "#94A3B8",
   },
   helperText: {
     marginTop: 8,

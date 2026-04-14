@@ -3,7 +3,8 @@ import { useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { collection, collectionGroup, doc, getDoc, onSnapshot } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
+import { collection, collectionGroup, doc, getDoc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -17,14 +18,31 @@ import {
   View,
 } from "react-native";
 import { isGuestMode } from "../../lib/app-state";
-import { auth, db } from "../../lib/firebase";
-import { parseLaundryShop, type LaundryShop } from "../../lib/laundry-shops";
+import { auth, db, functions } from "../../lib/firebase";
+import { isShopCurrentlyOpen, parseLaundryShop, type LaundryShop } from "../../lib/laundry-shops";
 
 const DEFAULT_SHOP_IMAGE = require("../../assets/images/slide1.png");
 
 type ShopReviewSummary = {
   average: number;
   count: number;
+};
+
+type DistanceOverride = {
+  distanceKm: number;
+  durationText: string;
+};
+
+type UserAddressEntry = {
+  id?: string;
+  fields?: { latitude?: number; longitude?: number };
+};
+
+type UserProfileDoc = {
+  addresses?: UserAddressEntry[];
+  primaryAddressId?: string;
+  mobileNumber?: string;
+  address?: string;
 };
 
 function getGreeting(): string {
@@ -41,7 +59,13 @@ export default function HomeScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [shops, setShops] = useState<LaundryShop[]>([]);
   const [shopReviewSummaryById, setShopReviewSummaryById] = useState<Record<string, ShopReviewSummary>>({});
+  const [distanceOverrides, setDistanceOverrides] = useState<Record<string, DistanceOverride>>({});
+  const [userCoordinates, setUserCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
   const [isLoadingShops, setIsLoadingShops] = useState(true);
+  const [filterOpenOnly, setFilterOpenOnly] = useState(false);
+  const [filterExpressOnly, setFilterExpressOnly] = useState(false);
+  const [filterNearbyOnly, setFilterNearbyOnly] = useState(false);
+  const [filterLowestPrice, setFilterLowestPrice] = useState(false);
   const isLoggedIn = !!user;
 
   useEffect(() => {
@@ -134,6 +158,7 @@ export default function HomeScreen() {
     const currentUser = auth.currentUser;
     if (!currentUser) {
       setMissingContactMessage("");
+      setUserCoordinates(null);
       return;
     }
 
@@ -141,10 +166,11 @@ export default function HomeScreen() {
       const userSnap = await getDoc(doc(db, "users", currentUser.uid));
       if (!userSnap.exists()) {
         setMissingContactMessage("Your address and phone number are not set yet.");
+        setUserCoordinates(null);
         return;
       }
 
-      const data = userSnap.data() as { mobileNumber?: string; address?: string };
+      const data = userSnap.data() as UserProfileDoc;
       const mobileNumber = (data.mobileNumber ?? "").trim();
       const address = (data.address ?? "").trim();
       const missingAddress = !address;
@@ -159,8 +185,21 @@ export default function HomeScreen() {
       } else {
         setMissingContactMessage("");
       }
+
+      const addresses = Array.isArray(data.addresses) ? data.addresses : [];
+      const primaryId = typeof data.primaryAddressId === "string" ? data.primaryAddressId : "";
+      const primaryAddress =
+        addresses.find((entry) => entry.id && entry.id === primaryId) || addresses[0];
+      const latitude = primaryAddress?.fields?.latitude;
+      const longitude = primaryAddress?.fields?.longitude;
+      if (typeof latitude === "number" && typeof longitude === "number") {
+        setUserCoordinates({ latitude, longitude });
+      } else {
+        setUserCoordinates(null);
+      }
     } catch {
       setMissingContactMessage("");
+      setUserCoordinates(null);
     }
   }, []);
 
@@ -174,14 +213,115 @@ export default function HomeScreen() {
   const userName = user?.displayName?.split(" ")[0] || "there";
   const filteredLaundryShops = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
-    if (!normalizedQuery) {
-      return shops;
+    let results = shops;
+
+    if (normalizedQuery) {
+      results = results.filter((shop) =>
+        shop.shopName.toLowerCase().includes(normalizedQuery)
+      );
     }
 
-    return shops.filter((shop) =>
-      shop.shopName.toLowerCase().includes(normalizedQuery)
-    );
-  }, [searchQuery, shops]);
+    if (filterOpenOnly) {
+      results = results.filter((shop) => isShopCurrentlyOpen(shop));
+    }
+
+    if (filterExpressOnly) {
+      results = results.filter((shop) =>
+        shop.pickupWindows.some(
+          (window) =>
+            window.enabled &&
+            (window.forService === "express" || window.forService === "both")
+        )
+      );
+    }
+
+    if (filterNearbyOnly) {
+      results = results.filter((shop) => {
+        const override = distanceOverrides[shop.id];
+        const distanceKm = override?.distanceKm ?? shop.distanceKm;
+        return distanceKm <= 3;
+      });
+    }
+
+    if (filterLowestPrice) {
+      results = [...results].sort((a, b) => a.priceRangeMin - b.priceRangeMin);
+    } else {
+      results = [...results].sort((a, b) => {
+        const distanceA = distanceOverrides[a.id]?.distanceKm ?? a.distanceKm;
+        const distanceB = distanceOverrides[b.id]?.distanceKm ?? b.distanceKm;
+        return distanceA - distanceB;
+      });
+    }
+
+    return results;
+  }, [
+    distanceOverrides,
+    filterExpressOnly,
+    filterLowestPrice,
+    filterNearbyOnly,
+    filterOpenOnly,
+    searchQuery,
+    shops,
+  ]);
+
+  useEffect(() => {
+    let canceled = false;
+    const fetchDistances = async () => {
+      if (!userCoordinates || !shops.length) {
+        return;
+      }
+      const callable = httpsCallable(functions, "getDrivingDistance");
+      const updates: Record<string, DistanceOverride> = {};
+
+      await Promise.all(
+        shops.map(async (shop) => {
+          const { latitude, longitude } = shop.addressFields ?? {};
+          if (typeof latitude !== "number" || typeof longitude !== "number") {
+            return;
+          }
+
+          try {
+            const result = await callable({
+              origin: userCoordinates,
+              destination: { latitude, longitude },
+            });
+            const response = result.data as { distanceKm?: number; durationText?: string };
+            const distanceKm = Number(response.distanceKm);
+            if (!Number.isFinite(distanceKm)) {
+              return;
+            }
+            updates[shop.id] = {
+              distanceKm,
+              durationText: response.durationText ?? "",
+            };
+
+            if (auth.currentUser) {
+              await setDoc(
+                doc(db, "users", auth.currentUser.uid, "shopDistances", shop.id),
+                {
+                  distanceKm,
+                  durationText: response.durationText ?? "",
+                  updatedAt: serverTimestamp(),
+                },
+                { merge: true }
+              );
+            }
+          } catch {
+            // Ignore distance failures for now.
+          }
+        })
+      );
+
+      if (!canceled && Object.keys(updates).length) {
+        setDistanceOverrides((previous) => ({ ...previous, ...updates }));
+      }
+    };
+
+    void fetchDistances();
+    return () => {
+      canceled = true;
+    };
+  }, [shops, userCoordinates]);
 
   return (
     <LinearGradient colors={["#55B7E9", "#2E95D3"]} style={styles.container}>
@@ -238,6 +378,33 @@ export default function HomeScreen() {
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Laundry Shops Near You</Text>
 
+            <View style={styles.filterRow}>
+              <TouchableOpacity
+                style={[styles.filterChip, filterOpenOnly && styles.filterChipActive]}
+                onPress={() => setFilterOpenOnly((previous) => !previous)}
+              >
+                <Text style={[styles.filterChipText, filterOpenOnly && styles.filterChipTextActive]}>Open now</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.filterChip, filterExpressOnly && styles.filterChipActive]}
+                onPress={() => setFilterExpressOnly((previous) => !previous)}
+              >
+                <Text style={[styles.filterChipText, filterExpressOnly && styles.filterChipTextActive]}>Express</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.filterChip, filterNearbyOnly && styles.filterChipActive]}
+                onPress={() => setFilterNearbyOnly((previous) => !previous)}
+              >
+                <Text style={[styles.filterChipText, filterNearbyOnly && styles.filterChipTextActive]}>Within 3 km</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.filterChip, filterLowestPrice && styles.filterChipActive]}
+                onPress={() => setFilterLowestPrice((previous) => !previous)}
+              >
+                <Text style={[styles.filterChipText, filterLowestPrice && styles.filterChipTextActive]}>Lowest price</Text>
+              </TouchableOpacity>
+            </View>
+
             {isLoadingShops ? (
               <View style={styles.loadingShopsWrap}>
                 <ActivityIndicator color="#1B7FB4" />
@@ -248,6 +415,10 @@ export default function HomeScreen() {
                 const reviewSummary = shopReviewSummaryById[item.id];
                 const ratingAverage = reviewSummary?.average ?? 0;
                 const ratingCount = reviewSummary?.count ?? 0;
+                const distanceMeta = distanceOverrides[item.id];
+                const distanceKm = distanceMeta?.distanceKm ?? item.distanceKm;
+                const durationText = distanceMeta?.durationText ?? "";
+                const isOpen = isShopCurrentlyOpen(item);
 
                 return (
                   <View key={item.id} style={styles.shopCard}>
@@ -256,7 +427,14 @@ export default function HomeScreen() {
                       style={styles.shopImage}
                     />
                     <View style={styles.shopInfo}>
-                      <Text style={styles.shopName}>{item.shopName}</Text>
+                      <View style={styles.shopNameRow}>
+                        <Text style={styles.shopName}>{item.shopName}</Text>
+                        <View style={[styles.statusPill, isOpen ? styles.statusPillOpen : styles.statusPillClosed]}>
+                          <Text style={[styles.statusPillText, isOpen ? styles.statusPillTextOpen : styles.statusPillTextClosed]}>
+                            {isOpen ? "Open now" : "Closed"}
+                          </Text>
+                        </View>
+                      </View>
 
                       <View style={styles.ratingRow}>
                         <Ionicons name="star" size={14} color="#F4C430" />
@@ -271,11 +449,14 @@ export default function HomeScreen() {
                       </View>
 
                       <Text style={styles.shopAddress}>
-                        from {item.distanceKm.toFixed(1)} km | {item.address || "Address not set"}
+                        {distanceKm.toFixed(1)} km away
+                        {durationText ? ` • ${durationText}` : ""} | {item.address || "Address not set"}
                       </Text>
 
                       <View style={styles.shopFooter}>
-                        <Text style={styles.shopPrice}>{item.priceLabel}</Text>
+                        <Text style={styles.shopPrice}>
+                          {item.priceRangeMin > 0 ? `From P${Math.round(item.priceRangeMin)}/kg` : item.priceLabel}
+                        </Text>
                         <TouchableOpacity
                           style={styles.viewButton}
                           onPress={() =>
@@ -330,7 +511,7 @@ const styles = StyleSheet.create({
   },
 
   scrollContent: {
-    paddingBottom: 40,
+    paddingBottom: 140,
   },
 
   headerRow: {
@@ -460,6 +641,32 @@ const styles = StyleSheet.create({
     color: "#51AEE1",
     marginBottom: 12,
   },
+  filterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 12,
+  },
+  filterChip: {
+    borderWidth: 1,
+    borderColor: "#D3E7F6",
+    backgroundColor: "#F3F9FF",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  filterChipActive: {
+    backgroundColor: "#DBF4FF",
+    borderColor: "#2E95D3",
+  },
+  filterChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#28506B",
+  },
+  filterChipTextActive: {
+    color: "#145A86",
+  },
 
   shopCard: {
     flexDirection: "row",
@@ -486,11 +693,41 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "space-between",
   },
+  shopNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
 
   shopName: {
     fontSize: 18,
     fontWeight: "700",
     color: "#111",
+  },
+  statusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+  },
+  statusPillOpen: {
+    backgroundColor: "#DCFCE7",
+    borderColor: "#22C55E",
+  },
+  statusPillClosed: {
+    backgroundColor: "#FEE2E2",
+    borderColor: "#EF4444",
+  },
+  statusPillText: {
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  statusPillTextOpen: {
+    color: "#166534",
+  },
+  statusPillTextClosed: {
+    color: "#991B1B",
   },
 
   ratingRow: {
@@ -571,8 +808,8 @@ const styles = StyleSheet.create({
 
   searchBarWrapper: {
     marginHorizontal: 28,
-    marginTop: 8,
-    marginBottom: 24,
+    marginTop: 18,
+    marginBottom: 10,
   },
 
   searchBar: {

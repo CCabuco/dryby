@@ -523,7 +523,7 @@ export default function LaundryShopScreen() {
             <View style={styles.heroMetaRow}>
               <Ionicons name="star" size={24} color="#F4C430" />
               <Text style={styles.heroMetaText}>
-                {reviewSummaryLabel} | {shop.priceLabel}
+                {reviewSummaryLabel} | {shop.priceRangeMin > 0 ? `From P${Math.round(shop.priceRangeMin)}/kg` : shop.priceLabel}
               </Text>
             </View>
           </View>
@@ -555,7 +555,9 @@ export default function LaundryShopScreen() {
                   <Text style={styles.noRatingText}>No reviews yet</Text>
                 )}
               </View>
-              <Text style={styles.priceText}>{shop.priceLabel}</Text>
+              <Text style={styles.priceText}>
+                {shop.priceRangeMin > 0 ? `From P${Math.round(shop.priceRangeMin)}/kg` : shop.priceLabel}
+              </Text>
             </View>
 
             <View style={styles.tagsRow}>

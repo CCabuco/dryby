@@ -6,5 +6,8 @@
     "public": "dist",
     "ignore": ["firebase.json", "**/.*"],
     "cleanUrls": true
+  },
+  "functions": {
+    "source": "functions"
   }
 }

@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
+import { router } from "expo-router";
 import React from "react";
 import {
   ActivityIndicator,
@@ -143,6 +144,21 @@ export default function CartScreen() {
               </>
             )}
           </View>
+
+          {!isLoading && cartItems.length > 0 ? (
+            <View style={styles.cartSummaryBar}>
+              <View>
+                <Text style={styles.cartSummaryTitle}>{totalQuantity} item(s)</Text>
+                <Text style={styles.cartSummarySubtitle}>Ready for checkout</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.cartSummaryButton}
+                onPress={() => router.push("/(tabs)/transactions")}
+              >
+                <Text style={styles.cartSummaryButtonText}>Checkout</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </View>
       </SafeAreaView>
     </LinearGradient>
@@ -164,6 +180,7 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: 430,
     alignSelf: "center",
+    position: "relative",
   },
   headerRow: {
     flexDirection: "row",
@@ -213,6 +230,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: "rgba(248, 250, 252, 0.58)",
     padding: 12,
+    paddingBottom: 86,
   },
   centerState: {
     flex: 1,
@@ -243,6 +261,45 @@ const styles = StyleSheet.create({
   listContent: {
     gap: 10,
     paddingBottom: 6,
+  },
+  cartSummaryBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 6,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    shadowColor: "#0F172A",
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  cartSummaryTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  cartSummarySubtitle: {
+    fontSize: 12,
+    color: "#64748B",
+    marginTop: 2,
+  },
+  cartSummaryButton: {
+    backgroundColor: "#F4C430",
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  cartSummaryButtonText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#111827",
   },
   itemCard: {
     borderRadius: 14,
