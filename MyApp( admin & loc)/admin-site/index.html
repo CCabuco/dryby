@@ -104,6 +104,56 @@
                 <h3>Registered Accounts</h3>
               </div>
             </div>
+            <div class="form-grid stacked admin-create-form">
+              <label class="field">
+                <span>Create Admin Name</span>
+                <input
+                  id="create-admin-name-input"
+                  type="text"
+                  placeholder="New Admin"
+                  autocomplete="name"
+                />
+              </label>
+              <label class="field">
+                <span>Create Admin Email</span>
+                <input
+                  id="create-admin-email-input"
+                  type="email"
+                  placeholder="newadmin@example.com"
+                  autocomplete="email"
+                />
+              </label>
+              <label class="field">
+                <span>Create Admin Password</span>
+                <input
+                  id="create-admin-password-input"
+                  type="password"
+                  placeholder="Enter a strong password"
+                  autocomplete="new-password"
+                />
+              </label>
+            </div>
+            <div class="button-row">
+              <button class="primary-button" id="create-admin-btn" type="button">
+                Create Admin Account
+              </button>
+            </div>
+            <div class="form-grid admin-promote-form">
+              <label class="field">
+                <span>Promote by Email</span>
+                <input
+                  id="promote-email-input"
+                  type="email"
+                  placeholder="user@example.com"
+                  autocomplete="email"
+                />
+              </label>
+            </div>
+            <div class="button-row">
+              <button class="success-button" id="promote-email-btn" type="button">
+                Make Admin by Email
+              </button>
+            </div>
             <p class="message" id="users-message"></p>
             <div class="card-list" id="users-list"></div>
           </section>

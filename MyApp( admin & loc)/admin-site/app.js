@@ -25,6 +25,7 @@ const firebaseConfig = {
   messagingSenderId: "1015853400258",
   appId: "1:1015853400258:web:cdfc03ace87e78454a3b5b",
 };
+const identityToolkitBaseUrl = "https://identitytoolkit.googleapis.com/v1";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -56,6 +57,12 @@ const elements = {
   shopsList: document.getElementById("shops-list"),
   usersList: document.getElementById("users-list"),
   usersMessage: document.getElementById("users-message"),
+  createAdminNameInput: document.getElementById("create-admin-name-input"),
+  createAdminEmailInput: document.getElementById("create-admin-email-input"),
+  createAdminPasswordInput: document.getElementById("create-admin-password-input"),
+  createAdminButton: document.getElementById("create-admin-btn"),
+  promoteEmailInput: document.getElementById("promote-email-input"),
+  promoteEmailButton: document.getElementById("promote-email-btn"),
   transactionsList: document.getElementById("transactions-list"),
   announcementsList: document.getElementById("announcements-list"),
   announcementTitle: document.getElementById("announcement-title"),
@@ -76,6 +83,13 @@ function normalizeEmail(value) {
 
 function validateEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function getPasswordIssue(value) {
+  if (value.length < 8) {
+    return "Password must be at least 8 characters.";
+  }
+  return "";
 }
 
 function escapeHtml(value) {
@@ -249,10 +263,18 @@ function roleActionMarkup(user) {
 }
 
 function renderUsers() {
+  const promoteDisabled = state.currentRole !== "super-admin";
   const roleNote =
     state.currentRole === "super-admin"
       ? '<div class="info-chip">You can promote users to admin or return admins to regular user access.</div>'
       : '<div class="info-chip">Only super-admin accounts can change user roles.</div>';
+
+  elements.promoteEmailInput.disabled = promoteDisabled;
+  elements.promoteEmailButton.disabled = promoteDisabled;
+  elements.createAdminNameInput.disabled = promoteDisabled;
+  elements.createAdminEmailInput.disabled = promoteDisabled;
+  elements.createAdminPasswordInput.disabled = promoteDisabled;
+  elements.createAdminButton.disabled = promoteDisabled;
 
   const cards = state.users.length
     ? state.users
@@ -522,6 +544,207 @@ async function handleUserRoleUpdate(userId, nextRole) {
   }
 }
 
+async function handlePromoteByEmail() {
+  if (state.currentRole !== "super-admin") {
+    renderMessage(elements.usersMessage, "Only super-admin can promote users by email.", "error");
+    return;
+  }
+
+  const email = normalizeEmail(elements.promoteEmailInput.value);
+  if (!validateEmail(email)) {
+    renderMessage(elements.usersMessage, "Enter a valid email address first.", "error");
+    return;
+  }
+
+  elements.promoteEmailButton.disabled = true;
+  elements.promoteEmailButton.textContent = "Checking...";
+  renderMessage(elements.usersMessage, "");
+
+  try {
+    const matchedUser = state.users.find(
+      (user) => normalizeEmail(user.email || "") === email
+    );
+
+    if (!matchedUser) {
+      renderMessage(
+        elements.usersMessage,
+        "No matching Firestore user was found for that email. The user needs to sign up first.",
+        "error"
+      );
+      return;
+    }
+
+    const currentRole = matchedUser.role || "user";
+
+    if (matchedUser.id === state.currentUser?.uid) {
+      renderMessage(elements.usersMessage, "Your account is already managing admin access.", "error");
+      return;
+    }
+
+    if (currentRole === "super-admin") {
+      renderMessage(elements.usersMessage, "That account is already a super-admin.", "success");
+      return;
+    }
+
+    if (currentRole === "admin") {
+      renderMessage(elements.usersMessage, "That account is already an admin.", "success");
+      return;
+    }
+
+    await updateDoc(doc(db, "users", matchedUser.id), {
+      role: "admin",
+      updatedAt: serverTimestamp(),
+    });
+
+    elements.promoteEmailInput.value = "";
+    renderMessage(elements.usersMessage, `Promoted ${email} to admin.`, "success");
+  } catch {
+    renderMessage(elements.usersMessage, "Unable to promote that user right now.", "error");
+  } finally {
+    elements.promoteEmailButton.disabled = state.currentRole !== "super-admin";
+    elements.promoteEmailButton.textContent = "Make Admin by Email";
+  }
+}
+
+async function createAuthUser(email, password) {
+  const response = await fetch(
+    `${identityToolkitBaseUrl}/accounts:signUp?key=${encodeURIComponent(firebaseConfig.apiKey)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email,
+        password,
+        returnSecureToken: true,
+      }),
+    }
+  );
+
+  const payload = await response.json();
+  if (!response.ok) {
+    const message = payload?.error?.message || "UNKNOWN_ERROR";
+    throw new Error(message);
+  }
+
+  return payload;
+}
+
+async function createFirestoreUserProfile(uid, email, fullName, idToken) {
+  const response = await fetch(
+    `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/(default)/documents/users/${encodeURIComponent(uid)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({
+        fields: {
+          uid: { stringValue: uid },
+          email: { stringValue: email },
+          fullName: { stringValue: fullName },
+          authProvider: { stringValue: "password" },
+          createdAt: { timestampValue: new Date().toISOString() },
+        },
+      }),
+    }
+  );
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message =
+      payload?.error?.message || payload?.error?.status || "FIRESTORE_PROFILE_CREATE_FAILED";
+    throw new Error(message);
+  }
+
+  return payload;
+}
+
+async function handleCreateAdminAccount() {
+  if (state.currentRole !== "super-admin") {
+    renderMessage(elements.usersMessage, "Only super-admin can create admin accounts.", "error");
+    return;
+  }
+
+  const fullName = sanitizeInput(elements.createAdminNameInput.value).trim();
+  const email = normalizeEmail(elements.createAdminEmailInput.value);
+  const password = elements.createAdminPasswordInput.value;
+
+  if (!fullName) {
+    renderMessage(elements.usersMessage, "Enter a name for the new admin account.", "error");
+    return;
+  }
+
+  if (!validateEmail(email)) {
+    renderMessage(elements.usersMessage, "Enter a valid admin email address.", "error");
+    return;
+  }
+
+  const passwordIssue = getPasswordIssue(password);
+  if (passwordIssue) {
+    renderMessage(elements.usersMessage, passwordIssue, "error");
+    return;
+  }
+
+  elements.createAdminButton.disabled = true;
+  elements.createAdminButton.textContent = "Creating...";
+  renderMessage(elements.usersMessage, "");
+
+  try {
+    const existingUser = state.users.find(
+      (user) => normalizeEmail(user.email || "") === email
+    );
+
+    if (existingUser) {
+      renderMessage(
+        elements.usersMessage,
+        "That email already exists in Firestore. Use Make Admin by Email instead.",
+        "error"
+      );
+      return;
+    }
+
+    renderMessage(elements.usersMessage, "Creating Firebase account...", "success");
+    const authResult = await createAuthUser(email, password);
+    const uid = authResult.localId;
+    renderMessage(elements.usersMessage, "Saving user profile...", "success");
+    await createFirestoreUserProfile(uid, email, fullName, authResult.idToken);
+
+    renderMessage(elements.usersMessage, "Promoting account to admin...", "success");
+    await updateDoc(doc(db, "users", uid), {
+      role: "admin",
+      updatedAt: serverTimestamp(),
+    });
+
+    elements.createAdminNameInput.value = "";
+    elements.createAdminEmailInput.value = "";
+    elements.createAdminPasswordInput.value = "";
+    renderMessage(elements.usersMessage, `Created admin account for ${email}.`, "success");
+  } catch (error) {
+    const message = String(error?.message || "");
+    let friendlyMessage = "Unable to create admin account right now.";
+    if (message.includes("EMAIL_EXISTS")) {
+      friendlyMessage = "That email already has an account. Use Make Admin by Email instead.";
+    } else if (message.includes("WEAK_PASSWORD")) {
+      friendlyMessage = "Password is too weak. Use at least 8 characters.";
+    } else if (message.includes("INVALID_EMAIL")) {
+      friendlyMessage = "That email address is invalid.";
+    } else if (message.includes("OPERATION_NOT_ALLOWED")) {
+      friendlyMessage = "Email/password sign-up is not enabled in Firebase Authentication.";
+    } else if (message.includes("PERMISSION_DENIED")) {
+      friendlyMessage = "Firestore blocked creating the profile. The account may exist in Auth but not in users yet.";
+    } else if (message.includes("FIRESTORE_PROFILE_CREATE_FAILED")) {
+      friendlyMessage = "The Firebase account was created, but the Firestore user profile could not be saved.";
+    }
+    renderMessage(elements.usersMessage, friendlyMessage, "error");
+  } finally {
+    elements.createAdminButton.disabled = state.currentRole !== "super-admin";
+    elements.createAdminButton.textContent = "Create Admin Account";
+  }
+}
+
 async function handlePublishAnnouncement() {
   const title = sanitizeInput(elements.announcementTitle.value).trim();
   const body = sanitizeInput(elements.announcementBody.value).trim();
@@ -590,6 +813,34 @@ elements.signOutButton.addEventListener("click", async () => {
 
 elements.publishButton.addEventListener("click", () => {
   void handlePublishAnnouncement();
+});
+
+elements.createAdminButton.addEventListener("click", () => {
+  void handleCreateAdminAccount();
+});
+
+elements.promoteEmailButton.addEventListener("click", () => {
+  void handlePromoteByEmail();
+});
+
+elements.promoteEmailInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void handlePromoteByEmail();
+  }
+});
+
+[
+  elements.createAdminNameInput,
+  elements.createAdminEmailInput,
+  elements.createAdminPasswordInput,
+].forEach((input) => {
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void handleCreateAdminAccount();
+    }
+  });
 });
 
 document.addEventListener("click", (event) => {

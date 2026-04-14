@@ -210,6 +210,10 @@ textarea {
   grid-template-columns: 1fr;
 }
 
+.admin-promote-form {
+  margin-bottom: 2px;
+}
+
 .field {
   display: grid;
   gap: 8px;
