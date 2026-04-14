@@ -26,6 +26,7 @@ export default function CartScreen() {
   const [cartItems, setCartItems] = React.useState<CartItem[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [guestMode, setGuestModeLabel] = React.useState(false);
+  const [selectedItem, setSelectedItem] = React.useState<CartItem | null>(null);
 
   const loadCart = React.useCallback(async () => {
     setIsLoading(true);
@@ -120,7 +121,12 @@ export default function CartScreen() {
                   showsVerticalScrollIndicator={false}
                 >
                   {cartItems.map((item) => (
-                    <View key={item.id} style={styles.itemCard}>
+                    <TouchableOpacity
+                      key={item.id}
+                      style={styles.itemCard}
+                      onPress={() => setSelectedItem(item)}
+                      activeOpacity={0.85}
+                    >
                       <View style={styles.itemTopRow}>
                         <Text style={styles.itemShop}>{item.shopName}</Text>
                         <Text style={styles.itemPrice}>{item.priceLabel}</Text>
@@ -138,7 +144,7 @@ export default function CartScreen() {
                         <Ionicons name="trash-outline" size={14} color="#B00020" />
                         <Text style={styles.removeText}>Remove</Text>
                       </TouchableOpacity>
-                    </View>
+                    </TouchableOpacity>
                   ))}
                 </ScrollView>
               </>
@@ -161,6 +167,68 @@ export default function CartScreen() {
           ) : null}
         </View>
       </SafeAreaView>
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={!!selectedItem}
+        onRequestClose={() => setSelectedItem(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Cart Item Details</Text>
+
+            <View style={styles.modalSection}>
+              <Text style={styles.modalSectionTitle}>Shop</Text>
+              <Text style={styles.modalSectionValue}>{selectedItem?.shopName}</Text>
+            </View>
+
+            <View style={styles.modalSection}>
+              <Text style={styles.modalSectionTitle}>Service</Text>
+              <Text style={styles.modalSectionValue}>{selectedItem?.title}</Text>
+            </View>
+
+            <View style={styles.modalSection}>
+              <Text style={styles.modalSectionTitle}>Pricing</Text>
+              <Text style={styles.modalSectionValue}>{selectedItem?.priceLabel}</Text>
+            </View>
+
+            <View style={styles.modalSection}>
+              <Text style={styles.modalSectionTitle}>Address</Text>
+              <Text style={styles.modalSectionValue}>{selectedItem?.address}</Text>
+            </View>
+
+            <View style={styles.modalMetaRow}>
+              <Text style={styles.modalMetaText}>
+                {selectedItem ? `${selectedItem.distanceKm.toFixed(1)} km away` : ""}
+              </Text>
+              <Text style={styles.modalMetaText}>
+                Qty: {selectedItem?.quantity ?? 0}
+              </Text>
+            </View>
+
+            <View style={styles.modalActionRow}>
+              {selectedItem ? (
+                <TouchableOpacity
+                  style={styles.modalSecondaryButton}
+                  onPress={() => {
+                    void handleRemove(selectedItem.id);
+                    setSelectedItem(null);
+                  }}
+                >
+                  <Text style={styles.modalSecondaryText}>Remove</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setSelectedItem(null)}
+              >
+                <Text style={styles.modalCloseText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </LinearGradient>
   );
 }
@@ -357,5 +425,88 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#B00020",
     fontWeight: "700",
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.6)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    padding: 18,
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#0F172A",
+    marginBottom: 14,
+  },
+  modalSection: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 12,
+  },
+  modalSectionTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#0F172A",
+    marginBottom: 6,
+  },
+  modalSectionValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  modalMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  modalMetaText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#475569",
+  },
+  modalActionRow: {
+    marginTop: 4,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 10,
+  },
+  modalSecondaryButton: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#B00020",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: "#FFFFFF",
+  },
+  modalSecondaryText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#B00020",
+  },
+  modalCloseButton: {
+    borderRadius: 16,
+    backgroundColor: "#F4C430",
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    alignItems: "center",
+  },
+  modalCloseText: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#111827",
   },
 });

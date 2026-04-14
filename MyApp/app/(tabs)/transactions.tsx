@@ -205,6 +205,64 @@ export default function TransactionsScreen() {
             <Text style={styles.modalTitle}>Transaction Details</Text>
 
             <View style={styles.modalSection}>
+              <Text style={styles.modalSectionTitle}>Progress Status</Text>
+              <Text style={styles.modalStatusLabel}>
+                Current status: {statusDescription(selectedTransaction?.status || "new")}
+              </Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.stepperScrollContent}
+              >
+                {statusFlow.map((status, index) => {
+                  const isCompleted = index < currentStatusIndex;
+                  const isActive = index === currentStatusIndex;
+                  return (
+                    <View key={status} style={styles.stepperSegment}>
+                      <View
+                        style={[
+                          styles.stepCircle,
+                          isCompleted && styles.stepCircleComplete,
+                          isActive && styles.stepCircleActive,
+                        ]}
+                      >
+                        {isCompleted ? (
+                          <Ionicons name="checkmark" size={14} color="#fff" />
+                        ) : (
+                          <Text
+                            style={[
+                              styles.stepIndex,
+                              isActive && styles.stepIndexActive,
+                            ]}
+                          >
+                            {index + 1}
+                          </Text>
+                        )}
+                      </View>
+                      {index < statusFlow.length - 1 && (
+                        <View
+                          style={[
+                            styles.stepConnector,
+                            isCompleted && styles.stepConnectorComplete,
+                          ]}
+                        />
+                      )}
+                      <Text
+                        style={[
+                          styles.stepLabel,
+                          isActive && styles.stepLabelActive,
+                          isCompleted && styles.stepLabelComplete,
+                        ]}
+                      >
+                        {statusDisplayLabel(status)}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            </View>
+
+            <View style={styles.modalSection}>
               <Text style={styles.modalSectionTitle}>Shop</Text>
               <Text style={styles.modalSectionValue}>
                 {selectedTransaction?.shopName || "Laundry Shop"}
@@ -261,60 +319,6 @@ export default function TransactionsScreen() {
               <Text style={styles.modalSectionValue}>
                 {selectedTransaction?.amount || "Amount pending"}
               </Text>
-            </View>
-
-            <View style={styles.modalSection}>
-              <Text style={styles.modalSectionTitle}>Progress Status</Text>
-              <Text style={styles.modalStatusLabel}>
-                Current status: {statusDescription(selectedTransaction?.status || "new")}
-              </Text>
-              <View style={styles.stepperRow}>
-                {statusFlow.map((status, index) => {
-                  const isCompleted = index < currentStatusIndex;
-                  const isActive = index === currentStatusIndex;
-                  return (
-                    <View key={status} style={styles.stepperSegment}>
-                      <View
-                        style={[
-                          styles.stepCircle,
-                          isCompleted && styles.stepCircleComplete,
-                          isActive && styles.stepCircleActive,
-                        ]}
-                      >
-                        {isCompleted ? (
-                          <Ionicons name="checkmark" size={14} color="#fff" />
-                        ) : (
-                          <Text
-                            style={[
-                              styles.stepIndex,
-                              isActive && styles.stepIndexActive,
-                            ]}
-                          >
-                            {index + 1}
-                          </Text>
-                        )}
-                      </View>
-                      {index < statusFlow.length - 1 && (
-                        <View
-                          style={[
-                            styles.stepConnector,
-                            isCompleted && styles.stepConnectorComplete,
-                          ]}
-                        />
-                      )}
-                      <Text
-                        style={[
-                          styles.stepLabel,
-                          isActive && styles.stepLabelActive,
-                          isCompleted && styles.stepLabelComplete,
-                        ]}
-                      >
-                        {statusDisplayLabel(status)}
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
             </View>
 
             <View style={styles.modalActionRow}>
@@ -494,15 +498,16 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     fontWeight: "600",
   },
-  stepperRow: {
+  stepperScrollContent: {
     flexDirection: "row",
     alignItems: "center",
-    flexWrap: "wrap",
-    gap: 8,
+    paddingBottom: 4,
+    paddingRight: 8,
   },
   stepperSegment: {
     flexDirection: "row",
     alignItems: "center",
+    marginRight: 10,
   },
   stepCircle: {
     width: 26,
@@ -544,7 +549,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "600",
     color: "#94A3B8",
-    marginRight: 6,
+    marginRight: 4,
   },
   stepLabelActive: {
     color: "#0B6394",
