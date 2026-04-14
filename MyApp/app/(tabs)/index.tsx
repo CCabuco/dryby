@@ -3,8 +3,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { httpsCallable } from "firebase/functions";
-import { collection, collectionGroup, doc, getDoc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, collectionGroup, getDoc, onSnapshot } from "firebase/firestore";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -18,7 +17,7 @@ import {
   View,
 } from "react-native";
 import { isGuestMode } from "../../lib/app-state";
-import { auth, db, functions } from "../../lib/firebase";
+import { auth, db } from "../../lib/firebase";
 import { isShopCurrentlyOpen, parseLaundryShop, type LaundryShop } from "../../lib/laundry-shops";
 
 const DEFAULT_SHOP_IMAGE = require("../../assets/images/slide1.png");
@@ -50,6 +49,26 @@ function getGreeting(): string {
   if (hour < 12) return "Good morning";
   if (hour < 18) return "Good afternoon";
   return "Good evening";
+}
+
+function toRadians(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function haversineKm(
+  origin: { latitude: number; longitude: number },
+  destination: { latitude: number; longitude: number }
+): number {
+  const R = 6371;
+  const dLat = toRadians(destination.latitude - origin.latitude);
+  const dLon = toRadians(destination.longitude - origin.longitude);
+  const lat1 = toRadians(origin.latitude);
+  const lat2 = toRadians(destination.latitude);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
 export default function HomeScreen() {
@@ -270,47 +289,23 @@ export default function HomeScreen() {
       if (!userCoordinates || !shops.length) {
         return;
       }
-      const callable = httpsCallable(functions, "getDrivingDistance");
       const updates: Record<string, DistanceOverride> = {};
+      shops.forEach((shop) => {
+        const { latitude, longitude } = shop.addressFields ?? {};
+        if (typeof latitude !== "number" || typeof longitude !== "number") {
+          return;
+        }
 
-      await Promise.all(
-        shops.map(async (shop) => {
-          const { latitude, longitude } = shop.addressFields ?? {};
-          if (typeof latitude !== "number" || typeof longitude !== "number") {
-            return;
-          }
+        const distanceKm = haversineKm(userCoordinates, { latitude, longitude });
+        if (!Number.isFinite(distanceKm)) {
+          return;
+        }
 
-          try {
-            const result = await callable({
-              origin: userCoordinates,
-              destination: { latitude, longitude },
-            });
-            const response = result.data as { distanceKm?: number; durationText?: string };
-            const distanceKm = Number(response.distanceKm);
-            if (!Number.isFinite(distanceKm)) {
-              return;
-            }
-            updates[shop.id] = {
-              distanceKm,
-              durationText: response.durationText ?? "",
-            };
-
-            if (auth.currentUser) {
-              await setDoc(
-                doc(db, "users", auth.currentUser.uid, "shopDistances", shop.id),
-                {
-                  distanceKm,
-                  durationText: response.durationText ?? "",
-                  updatedAt: serverTimestamp(),
-                },
-                { merge: true }
-              );
-            }
-          } catch {
-            // Ignore distance failures for now.
-          }
-        })
-      );
+        updates[shop.id] = {
+          distanceKm,
+          durationText: "",
+        };
+      });
 
       if (!canceled && Object.keys(updates).length) {
         setDistanceOverrides((previous) => ({ ...previous, ...updates }));
