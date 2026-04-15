@@ -1,17 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
-import { onAuthStateChanged, reload, type User } from "firebase/auth";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import {
   collection,
   doc,
-  getDoc,
   getDocs,
   limit,
   onSnapshot,
   query,
-  serverTimestamp,
-  setDoc,
 } from "firebase/firestore";
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -21,7 +18,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -33,13 +29,13 @@ import {
   type LaundryService,
   type LaundryShop,
 } from "../../lib/laundry-shops";
-import { containsBlockedContent, sanitizeInput } from "../../lib/security";
 
 const DEFAULT_SHOP_IMAGE = require("../../assets/images/slide1.png");
 
 type ReviewItem = {
   id: string;
   shopId: string;
+  orderId: string;
   userUid: string;
   userName: string;
   rating: number;
@@ -90,20 +86,22 @@ function parseReview(id: string, value: unknown): ReviewItem | null {
   const comment = typeof source.comment === "string" ? source.comment.trim() : "";
   const userUid = typeof source.userUid === "string" ? source.userUid : "";
   const shopId = typeof source.shopId === "string" ? source.shopId : "";
+  const orderId = typeof source.orderId === "string" ? source.orderId : id;
 
-  if (!rating || rating < 1 || rating > 5 || !comment || !userUid || !shopId) {
+  if (!rating || rating < 1 || rating > 5 || !userUid || !shopId) {
     return null;
   }
 
   return {
     id,
     shopId,
+    orderId,
     userUid,
     userName:
       (typeof source.userName === "string" && source.userName.trim()) ||
       "DryBy User",
     rating,
-    comment,
+    comment: comment || "No written review.",
     createdAtMs: parseTimestampMs(source.updatedAt ?? source.createdAt),
   };
 }
@@ -135,22 +133,12 @@ export default function LaundryShopScreen() {
   const [services, setServices] = useState<LaundryService[]>([]);
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(auth.currentUser);
-  const [isEmailVerified, setIsEmailVerified] = useState(!!auth.currentUser?.emailVerified);
-  const [reviewRating, setReviewRating] = useState(0);
-  const [reviewComment, setReviewComment] = useState("");
-  const [reviewError, setReviewError] = useState("");
-  const [reviewSuccess, setReviewSuccess] = useState("");
-  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
-  const [isRefreshingVerification, setIsRefreshingVerification] = useState(false);
-  const [canReviewShop, setCanReviewShop] = useState(false);
-  const [isCheckingReviewEligibility, setIsCheckingReviewEligibility] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [showAuthPrompt, setShowAuthPrompt] = useState(false);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
-      setIsEmailVerified(!!user?.emailVerified);
     });
     return unsubscribeAuth;
   }, []);
@@ -243,56 +231,6 @@ export default function LaundryShopScreen() {
     };
   }, [requestedShopId]);
 
-  useEffect(() => {
-    if (!shop || !currentUser) {
-      setCanReviewShop(false);
-      setIsCheckingReviewEligibility(false);
-      return;
-    }
-
-    setIsCheckingReviewEligibility(true);
-    const eligibilityRef = doc(
-      db,
-      "laundryShops",
-      shop.id,
-      "reviewEligibleUsers",
-      currentUser.uid
-    );
-
-    const unsubscribe = onSnapshot(
-      eligibilityRef,
-      (snapshot) => {
-        setCanReviewShop(snapshot.exists());
-        setIsCheckingReviewEligibility(false);
-      },
-      () => {
-        setCanReviewShop(false);
-        setIsCheckingReviewEligibility(false);
-      }
-    );
-
-    return unsubscribe;
-  }, [currentUser?.uid, shop?.id]);
-
-  useEffect(() => {
-    if (!currentUser) {
-      setReviewRating(0);
-      setReviewComment("");
-      setReviewError("");
-      setReviewSuccess("");
-      return;
-    }
-
-    const existing = reviews.find((item) => item.userUid === currentUser.uid);
-    if (existing) {
-      setReviewRating(existing.rating);
-      setReviewComment(existing.comment);
-    } else {
-      setReviewRating(0);
-      setReviewComment("");
-    }
-  }, [currentUser, reviews]);
-
   const waitForAuthState = async () => {
     try {
       if (typeof auth.authStateReady === "function") {
@@ -300,138 +238,6 @@ export default function LaundryShopScreen() {
       }
     } catch {
       // Continue with current auth state.
-    }
-  };
-
-  const refreshVerificationStatus = async () => {
-    const user = auth.currentUser;
-    if (!user) {
-      return;
-    }
-
-    setIsRefreshingVerification(true);
-    try {
-      await reload(user);
-      const verified = !!user.emailVerified;
-      setIsEmailVerified(verified);
-      if (verified) {
-        setReviewSuccess("Email verified. You can now submit a review.");
-        setReviewError("");
-      } else {
-        setReviewSuccess("");
-        setReviewError("Email is still unverified. Please open your verification link first.");
-      }
-    } catch {
-      setReviewSuccess("");
-      setReviewError("Unable to refresh verification status right now.");
-    } finally {
-      setIsRefreshingVerification(false);
-    }
-  };
-
-  const handleSubmitReview = async () => {
-    if (!shop) {
-      return;
-    }
-
-    await waitForAuthState();
-    const user = auth.currentUser;
-    if (!user) {
-      setReviewSuccess("");
-      setReviewError("Please log in to submit a review.");
-      return;
-    }
-
-    try {
-      await reload(user);
-    } catch {
-      // Keep current cached verification state.
-    }
-
-    const verified = !!user.emailVerified;
-    setIsEmailVerified(verified);
-    if (!verified) {
-      setReviewSuccess("");
-      setReviewError("Please verify your email before submitting a review.");
-      return;
-    }
-    if (isCheckingReviewEligibility) {
-      setReviewSuccess("");
-      setReviewError("Checking your completed transactions. Please try again in a moment.");
-      return;
-    }
-    if (!canReviewShop) {
-      setReviewSuccess("");
-      setReviewError("You can leave a review only after a completed transaction with this shop.");
-      return;
-    }
-
-    const normalizedComment = sanitizeInput(reviewComment).trim();
-    if (reviewRating < 1 || reviewRating > 5) {
-      setReviewSuccess("");
-      setReviewError("Please choose a rating from 1 to 5 stars.");
-      return;
-    }
-    if (normalizedComment.length < 5) {
-      setReviewSuccess("");
-      setReviewError("Please write at least 5 characters for your review.");
-      return;
-    }
-    if (normalizedComment.length > 500) {
-      setReviewSuccess("");
-      setReviewError("Review is too long. Keep it under 500 characters.");
-      return;
-    }
-    if (containsBlockedContent(normalizedComment)) {
-      setReviewSuccess("");
-      setReviewError("Review contains unsafe or blocked content.");
-      return;
-    }
-
-    setIsSubmittingReview(true);
-    setReviewError("");
-    setReviewSuccess("");
-
-    try {
-      const userRef = doc(db, "users", user.uid);
-      const userSnapshot = await getDoc(userRef);
-      const userData = userSnapshot.exists()
-        ? (userSnapshot.data() as { fullName?: string; firstName?: string; lastName?: string })
-        : null;
-
-      const profileName =
-        userData?.fullName?.trim() ||
-        `${userData?.firstName ?? ""} ${userData?.lastName ?? ""}`.trim() ||
-        user.displayName?.trim() ||
-        "DryBy User";
-
-      const reviewRef = doc(db, "laundryShops", shop.id, "reviews", user.uid);
-      const existingReview = await getDoc(reviewRef);
-      const payload: Record<string, unknown> = {
-        shopId: shop.id,
-        userUid: user.uid,
-        userName: profileName,
-        rating: reviewRating,
-        comment: normalizedComment,
-        updatedAt: serverTimestamp(),
-      };
-
-      if (!existingReview.exists()) {
-        payload.createdAt = serverTimestamp();
-      }
-
-      await setDoc(reviewRef, payload, { merge: true });
-      setReviewSuccess(existingReview.exists() ? "Review updated." : "Thanks! Your review is now live.");
-      setReviewError("");
-    } catch (error: any) {
-      if (error?.code === "permission-denied") {
-        setReviewError("Only verified users can submit reviews.");
-      } else {
-        setReviewError("Unable to submit review right now. Please try again.");
-      }
-      setReviewSuccess("");
-    } finally {
-      setIsSubmittingReview(false);
     }
   };
 
@@ -478,11 +284,6 @@ export default function LaundryShopScreen() {
   const serviceTags = availableServices.slice(0, 3).map((service) => service.serviceName);
   const reviewStats = useMemo(() => getReviewStats(reviews), [reviews]);
   const reviewSummaryLabel = useMemo(() => getReviewSummaryLabel(reviewStats), [reviewStats]);
-  const existingUserReview = useMemo(
-    () => reviews.find((item) => item.userUid === currentUser?.uid),
-    [currentUser?.uid, reviews]
-  );
-
   if (isLoading) {
     return (
       <View style={styles.loaderContainer}>
@@ -581,103 +382,16 @@ export default function LaundryShopScreen() {
               <Text style={styles.reviewsSummary}>{reviewSummaryLabel}</Text>
             </View>
 
-            {!currentUser ? (
-              <View style={styles.reviewGateCard}>
-                <Text style={styles.reviewGateText}>Log in and verify your email to leave a review.</Text>
+            <View style={styles.reviewGateCard}>
+              <Text style={styles.reviewGateText}>
+                Reviews can be submitted from Transaction Details after an order is completed.
+              </Text>
+              {!currentUser ? (
                 <TouchableOpacity style={styles.reviewGateButton} onPress={() => router.push("/login")}>
                   <Text style={styles.reviewGateButtonText}>Log in to review</Text>
                 </TouchableOpacity>
-              </View>
-            ) : !isEmailVerified ? (
-              <View style={styles.reviewGateCard}>
-                <Text style={styles.reviewGateText}>
-                  Verify your email first. Only verified users can submit reviews.
-                </Text>
-                <TouchableOpacity
-                  style={[styles.reviewGateButton, isRefreshingVerification && styles.disabledButton]}
-                  disabled={isRefreshingVerification}
-                  onPress={() => void refreshVerificationStatus()}
-                >
-                  <Text style={styles.reviewGateButtonText}>
-                    {isRefreshingVerification ? "Checking..." : "I've verified my email"}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ) : isCheckingReviewEligibility ? (
-              <View style={styles.reviewGateCard}>
-                <Text style={styles.reviewGateText}>Checking completed transactions...</Text>
-              </View>
-            ) : !canReviewShop ? (
-              <View style={styles.reviewGateCard}>
-                <Text style={styles.reviewGateText}>
-                  You can leave a review after you complete a transaction with this shop.
-                </Text>
-              </View>
-            ) : (
-              <View style={styles.reviewEditorCard}>
-                <Text style={styles.reviewEditorTitle}>
-                  {existingUserReview ? "Update your review" : "Write a review"}
-                </Text>
-
-                <View style={styles.ratingPickerRow}>
-                  {Array.from({ length: 5 }, (_, index) => {
-                    const starValue = index + 1;
-                    const isActive = starValue <= reviewRating;
-                    return (
-                      <TouchableOpacity
-                        key={starValue}
-                        style={styles.starButton}
-                        onPress={() => {
-                          setReviewRating(starValue);
-                          setReviewError("");
-                          setReviewSuccess("");
-                        }}
-                      >
-                        <Ionicons
-                          name={isActive ? "star" : "star-outline"}
-                          size={24}
-                          color={isActive ? "#F4C430" : "#94A3B8"}
-                        />
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-
-                <TextInput
-                  style={styles.reviewInput}
-                  multiline
-                  numberOfLines={4}
-                  value={reviewComment}
-                  onChangeText={(value) => {
-                    setReviewComment(sanitizeInput(value).slice(0, 500));
-                    setReviewError("");
-                    setReviewSuccess("");
-                  }}
-                  placeholder="Share your experience with this laundry shop"
-                  placeholderTextColor="#8A97A8"
-                  textAlignVertical="top"
-                  editable={!isSubmittingReview}
-                />
-                <Text style={styles.reviewCounter}>{reviewComment.length}/500</Text>
-
-                {!!reviewError ? <Text style={styles.reviewErrorText}>{reviewError}</Text> : null}
-                {!!reviewSuccess ? <Text style={styles.reviewSuccessText}>{reviewSuccess}</Text> : null}
-
-                <TouchableOpacity
-                  style={[styles.submitReviewButton, isSubmittingReview && styles.disabledButton]}
-                  disabled={isSubmittingReview}
-                  onPress={() => void handleSubmitReview()}
-                >
-                  <Text style={styles.submitReviewButtonText}>
-                    {isSubmittingReview
-                      ? "Saving review..."
-                      : existingUserReview
-                      ? "Update Review"
-                      : "Submit Review"}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
+              ) : null}
+            </View>
 
             {reviews.length ? (
               reviews.map((review) => {

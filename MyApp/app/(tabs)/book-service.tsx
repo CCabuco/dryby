@@ -1404,9 +1404,14 @@ export default function BookServiceScreen() {
         updatedAt: serverTimestamp(),
       };
 
-      await addDoc(collection(db, "laundryShops", selectedShop.id, "orders"), orderPayload);
+      const orderRef = doc(collection(db, "laundryShops", selectedShop.id, "orders"));
+      await setDoc(orderRef, {
+        ...orderPayload,
+        orderId: orderRef.id,
+      });
       await addDoc(collection(db, "transactions"), {
         userUid: userId,
+        orderId: orderRef.id,
         shopId: selectedShop.id,
         shopName: selectedShop.shopName,
         serviceType: orderPayload.serviceType,
@@ -1416,6 +1421,7 @@ export default function BookServiceScreen() {
         deliveryDate: orderPayload.deliveryDate,
         totalAmount: orderPayload.totalAmount,
         status: orderPayload.status,
+        completedAt: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });

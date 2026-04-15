@@ -80,7 +80,7 @@ type ServiceActionState = Record<LaundryAction, boolean>;
 type ProfileEditorSection = "basic" | "address" | "operations" | "services" | "branding";
 type DropdownType = "province" | "city";
 
-const ORDER_STATUSES = ["new", "accepted", "processing", "ready", "completed"];
+const ORDER_STATUSES = ["new", "accepted", "washing", "ready", "out_for_delivery", "completed"];
 const WEEKDAY_OPTIONS: DayKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const WEEKEND_OPTIONS: DayKey[] = ["Sat", "Sun"];
 const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
@@ -278,8 +278,11 @@ function joinPipeText(values: string[]): string {
 
 function getNextStatus(current: string): string {
   const index = ORDER_STATUSES.indexOf(current);
-  if (index < 0 || index === ORDER_STATUSES.length - 1) {
+  if (index < 0) {
     return ORDER_STATUSES[0];
+  }
+  if (index === ORDER_STATUSES.length - 1) {
+    return ORDER_STATUSES[index];
   }
   return ORDER_STATUSES[index + 1];
 }
@@ -740,7 +743,10 @@ export default function ShopManagementScreen() {
                 pickupWindow: String(data.pickupWindow ?? ""),
                 deliveryDate: String(data.deliveryDate ?? ""),
                 totalAmount: String(data.totalAmount ?? "P0"),
-                status: String(data.status ?? "new"),
+                status:
+                  String(data.status ?? "new").toLowerCase() === "processing"
+                    ? "washing"
+                    : String(data.status ?? "new"),
                 isDemo:
                   data.isDemo === true ||
                   String(data.customerNameCurrent ?? data.customerName ?? "").trim() === "Sample Customer",
@@ -1287,10 +1293,31 @@ export default function ShopManagementScreen() {
 
     try {
       const nextStatus = getNextStatus(order.status);
+      const completedAtField = nextStatus === "completed" ? serverTimestamp() : null;
       await updateDoc(doc(db, "laundryShops", shopId, "orders", order.id), {
         status: nextStatus,
+        completedAt: completedAtField,
         updatedAt: serverTimestamp(),
       });
+
+      if (order.customerUid) {
+        const transactionSnapshot = await getDocs(
+          query(
+            collection(db, "transactions"),
+            where("shopId", "==", shopId),
+            where("userUid", "==", order.customerUid),
+            where("orderId", "==", order.id),
+            limit(1)
+          )
+        );
+        if (!transactionSnapshot.empty) {
+          await updateDoc(transactionSnapshot.docs[0].ref, {
+            status: nextStatus,
+            completedAt: completedAtField,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
 
       if (nextStatus === "completed" && order.customerUid) {
         await setDoc(
@@ -1399,6 +1426,7 @@ export default function ShopManagementScreen() {
     }
 
     try {
+      const completedAtField = bookingStatus === "completed" ? serverTimestamp() : null;
       await updateDoc(doc(db, "laundryShops", shopId, "orders", bookingEditorId), {
         customerName: normalizedCustomerName,
         customerNameCurrent: normalizedCustomerName,
@@ -1406,8 +1434,27 @@ export default function ShopManagementScreen() {
         pickupDate: normalizedPickupDate,
         totalAmount: normalizedTotalAmount,
         status: bookingStatus,
+        completedAt: completedAtField,
         updatedAt: serverTimestamp(),
       });
+      if (selectedOrder?.customerUid) {
+        const transactionSnapshot = await getDocs(
+          query(
+            collection(db, "transactions"),
+            where("shopId", "==", shopId),
+            where("userUid", "==", selectedOrder.customerUid),
+            where("orderId", "==", bookingEditorId),
+            limit(1)
+          )
+        );
+        if (!transactionSnapshot.empty) {
+          await updateDoc(transactionSnapshot.docs[0].ref, {
+            status: bookingStatus,
+            completedAt: completedAtField,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
       setSuccessText("Demo booking updated.");
       closeBookingDialog();
     } catch {

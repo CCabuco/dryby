@@ -1,8 +1,18 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { router } from "expo-router";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { collection, limit, onSnapshot, query, where } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  limit,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Modal,
@@ -10,6 +20,7 @@ import {
   SafeAreaView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -17,9 +28,11 @@ import { auth, db } from "../../lib/firebase";
 
 type TransactionItem = {
   id: string;
+  orderId: string;
   title: string;
   amount: string;
   status: string;
+  completedAtMs: number | null;
   userNameDisplay: string;
   shopName: string;
   shopId: string;
@@ -31,9 +44,37 @@ type TransactionItem = {
 };
 
 const STATUS_FLOW = ["new", "accepted", "washing", "ready", "out_for_delivery", "completed"];
+const REVIEW_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+type OrderReview = {
+  orderId: string;
+  rating: number;
+  comment: string;
+};
+
+function parseTimestampMs(value: unknown): number | null {
+  if (value && typeof value === "object") {
+    const ts = value as { toMillis?: () => number; seconds?: number };
+    if (typeof ts.toMillis === "function") {
+      return ts.toMillis();
+    }
+    if (typeof ts.seconds === "number") {
+      return ts.seconds * 1000;
+    }
+  }
+  return null;
+}
+
+function normalizeStatus(value: string): string {
+  const normalized = (value || "").trim().toLowerCase();
+  if (normalized === "processing") {
+    return "washing";
+  }
+  return normalized;
+}
 
 function statusDisplayLabel(status: string): string {
-  const normalized = status.replace(/[_-]/g, " ").trim().toLowerCase();
+  const normalized = normalizeStatus(status).replace(/[_-]/g, " ");
   const readable = normalized
     .split(" ")
     .filter(Boolean)
@@ -43,7 +84,7 @@ function statusDisplayLabel(status: string): string {
 }
 
 function statusDescription(status: string): string {
-  const normalized = status.replace(/[_-]/g, " ").trim().toLowerCase();
+  const normalized = normalizeStatus(status).replace(/[_-]/g, " ");
   switch (normalized) {
     case "new":
       return "We received your order.";
@@ -66,6 +107,14 @@ export default function TransactionsScreen() {
   const [user, setUser] = useState<User | null>(auth.currentUser);
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<TransactionItem | null>(null);
+  const [orderReview, setOrderReview] = useState<OrderReview | null>(null);
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [reviewRating, setReviewRating] = useState(0);
+  const [reviewComment, setReviewComment] = useState("");
+  const [reviewError, setReviewError] = useState("");
+  const [reviewSuccess, setReviewSuccess] = useState("");
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [isLoadingReviewState, setIsLoadingReviewState] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
@@ -101,6 +150,7 @@ export default function TransactionsScreen() {
 
           return {
             id: record.id,
+            orderId: (data.orderId as string) || "",
             title:
               (data.title as string) ||
               `${(data.shopName as string) || "Laundry Shop"} - ${
@@ -110,7 +160,8 @@ export default function TransactionsScreen() {
               (data.totalAmount as string) ||
               (data.amount as string) ||
               "Amount pending",
-            status: (data.status as string) || "Pending",
+            status: normalizeStatus((data.status as string) || "new"),
+            completedAtMs: parseTimestampMs(data.completedAt),
             userNameDisplay,
             shopName: (data.shopName as string) || "Laundry Shop",
             shopId: (data.shopId as string) || "",
@@ -133,16 +184,167 @@ export default function TransactionsScreen() {
     return unsubscribe;
   }, [user]);
 
+  useEffect(() => {
+    let active = true;
+
+    const loadReview = async () => {
+      if (!selectedTransaction?.shopId || !selectedTransaction.orderId) {
+        setOrderReview(null);
+        setIsLoadingReviewState(false);
+        return;
+      }
+      setIsLoadingReviewState(true);
+      try {
+        const reviewRef = doc(
+          db,
+          "laundryShops",
+          selectedTransaction.shopId,
+          "reviews",
+          selectedTransaction.orderId
+        );
+        const reviewSnapshot = await getDoc(reviewRef);
+        if (!active) {
+          return;
+        }
+        if (!reviewSnapshot.exists()) {
+          setOrderReview(null);
+          return;
+        }
+        const data = reviewSnapshot.data() as Record<string, unknown>;
+        const rating = Number(data.rating) || 0;
+        setOrderReview({
+          orderId: selectedTransaction.orderId,
+          rating,
+          comment: String(data.comment ?? ""),
+        });
+      } catch {
+        if (active) {
+          setOrderReview(null);
+        }
+      } finally {
+        if (active) {
+          setIsLoadingReviewState(false);
+        }
+      }
+    };
+
+    void loadReview();
+    return () => {
+      active = false;
+    };
+  }, [selectedTransaction?.shopId, selectedTransaction?.orderId]);
+
   const hasTransactions = useMemo(() => transactions.length > 0, [transactions.length]);
   const statusFlow = STATUS_FLOW;
   const currentStatusIndex = useMemo(() => {
     if (!selectedTransaction?.status) {
       return 0;
     }
-    const normalized = selectedTransaction.status.trim().toLowerCase();
+    const normalized = normalizeStatus(selectedTransaction.status);
     const index = statusFlow.findIndex((status) => status === normalized);
     return index === -1 ? 0 : index;
   }, [selectedTransaction, statusFlow]);
+
+  const isCompleted = selectedTransaction?.status === "completed";
+  const hasCompletionTimestamp = typeof selectedTransaction?.completedAtMs === "number";
+  const reviewWindowEndMs = selectedTransaction?.completedAtMs
+    ? selectedTransaction.completedAtMs + REVIEW_WINDOW_MS
+    : null;
+  const isReviewWindowExpired =
+    !!reviewWindowEndMs && Date.now() > reviewWindowEndMs;
+  const canOpenReviewForm =
+    !!selectedTransaction &&
+    isCompleted &&
+    hasCompletionTimestamp &&
+    !!selectedTransaction.orderId &&
+    !orderReview &&
+    !isReviewWindowExpired;
+
+  const resetReviewForm = () => {
+    setReviewRating(0);
+    setReviewComment("");
+    setReviewError("");
+    setReviewSuccess("");
+  };
+
+  const openReviewModal = () => {
+    if (!canOpenReviewForm) {
+      return;
+    }
+    resetReviewForm();
+    setIsReviewModalOpen(true);
+  };
+
+  const closeReviewModal = () => {
+    setIsReviewModalOpen(false);
+    resetReviewForm();
+  };
+
+  const submitOrderReview = async () => {
+    if (!selectedTransaction || !user) {
+      return;
+    }
+    if (!selectedTransaction.orderId) {
+      setReviewError("Missing order reference for this transaction.");
+      return;
+    }
+    if (reviewRating < 1 || reviewRating > 5) {
+      setReviewError("Please choose a rating from 1 to 5 stars.");
+      return;
+    }
+    if (isReviewWindowExpired) {
+      setReviewError("Review period has ended.");
+      return;
+    }
+
+    setIsSubmittingReview(true);
+    setReviewError("");
+    setReviewSuccess("");
+
+    try {
+      const reviewRef = doc(
+        db,
+        "laundryShops",
+        selectedTransaction.shopId,
+        "reviews",
+        selectedTransaction.orderId
+      );
+      const reviewPayload = {
+        shopId: selectedTransaction.shopId,
+        orderId: selectedTransaction.orderId,
+        userUid: user.uid,
+        userName: selectedTransaction.userNameDisplay || user.displayName || "DryBy User",
+        rating: reviewRating,
+        comment: reviewComment.trim(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      await setDoc(reviewRef, reviewPayload, { merge: false });
+      await updateDoc(doc(db, "transactions", selectedTransaction.id), {
+        reviewSubmitted: true,
+        reviewedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      setOrderReview({
+        orderId: selectedTransaction.orderId,
+        rating: reviewRating,
+        comment: reviewComment.trim(),
+      });
+      setReviewSuccess("Review submitted.");
+      setTimeout(() => {
+        closeReviewModal();
+      }, 500);
+    } catch (error: any) {
+      if (error?.code === "permission-denied") {
+        setReviewError("You are not eligible to review this order.");
+      } else {
+        setReviewError("Unable to submit review right now. Please try again.");
+      }
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
 
   return (
     <LinearGradient colors={["#55B7E9", "#2E95D3"]} style={styles.container}>
@@ -322,18 +524,19 @@ export default function TransactionsScreen() {
             </View>
 
             <View style={styles.modalActionRow}>
-              {selectedTransaction?.status?.toLowerCase() === "completed" &&
-              selectedTransaction?.shopId ? (
-                <TouchableOpacity
-                  style={styles.modalSecondaryButton}
-                  onPress={() =>
-                    router.push({
-                      pathname: "/(tabs)/laundry-shop",
-                      params: { shopId: selectedTransaction.shopId },
-                    })
-                  }
-                >
-                  <Text style={styles.modalSecondaryText}>Leave a review</Text>
+              {isLoadingReviewState ? (
+                <Text style={styles.reviewStateText}>Checking review status...</Text>
+              ) : orderReview ? (
+                <Text style={styles.reviewStateSuccess}>Review submitted</Text>
+              ) : isCompleted && !hasCompletionTimestamp ? (
+                <Text style={styles.reviewStateText}>Review is not available for this order yet.</Text>
+              ) : isCompleted && !selectedTransaction?.orderId ? (
+                <Text style={styles.reviewStateText}>Order reference missing for review.</Text>
+              ) : isCompleted && isReviewWindowExpired ? (
+                <Text style={styles.reviewStateExpired}>Review period has ended</Text>
+              ) : canOpenReviewForm ? (
+                <TouchableOpacity style={styles.modalSecondaryButton} onPress={openReviewModal}>
+                  <Text style={styles.modalSecondaryText}>Leave a Review</Text>
                 </TouchableOpacity>
               ) : null}
               <TouchableOpacity
@@ -341,6 +544,64 @@ export default function TransactionsScreen() {
                 onPress={() => setSelectedTransaction(null)}
               >
                 <Text style={styles.modalCloseText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={isReviewModalOpen}
+        onRequestClose={closeReviewModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Leave a Review</Text>
+            <Text style={styles.modalHint}>Rate your completed order.</Text>
+            <View style={styles.ratingRow}>
+              {Array.from({ length: 5 }, (_, index) => {
+                const rating = index + 1;
+                const active = rating <= reviewRating;
+                return (
+                  <TouchableOpacity
+                    key={rating}
+                    style={styles.ratingButton}
+                    onPress={() => setReviewRating(rating)}
+                  >
+                    <Ionicons
+                      name={active ? "star" : "star-outline"}
+                      size={24}
+                      color={active ? "#F4C430" : "#94A3B8"}
+                    />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <Text style={styles.modalHint}>Review (optional)</Text>
+            <TextInput
+              style={styles.reviewInput}
+              multiline
+              value={reviewComment}
+              placeholder="Share your experience"
+              placeholderTextColor="#94A3B8"
+              onChangeText={setReviewComment}
+            />
+            {!!reviewError ? <Text style={styles.reviewError}>{reviewError}</Text> : null}
+            {!!reviewSuccess ? <Text style={styles.reviewSuccess}>{reviewSuccess}</Text> : null}
+            <View style={styles.modalActionRow}>
+              <TouchableOpacity style={styles.modalSecondaryButton} onPress={closeReviewModal}>
+                <Text style={styles.modalSecondaryText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => void submitOrderReview()}
+                disabled={isSubmittingReview}
+              >
+                <Text style={styles.modalCloseText}>
+                  {isSubmittingReview ? "Submitting..." : "Submit Review"}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -561,7 +822,61 @@ const styles = StyleSheet.create({
     marginTop: 12,
     flexDirection: "row",
     justifyContent: "flex-end",
+    alignItems: "center",
     gap: 10,
+  },
+  reviewStateText: {
+    fontSize: 12,
+    color: "#64748B",
+    fontWeight: "600",
+    marginRight: "auto",
+  },
+  reviewStateSuccess: {
+    fontSize: 12,
+    color: "#16A34A",
+    fontWeight: "700",
+    marginRight: "auto",
+  },
+  reviewStateExpired: {
+    fontSize: 12,
+    color: "#B45309",
+    fontWeight: "700",
+    marginRight: "auto",
+  },
+  modalHint: {
+    fontSize: 12,
+    color: "#64748B",
+    marginBottom: 8,
+  },
+  ratingRow: {
+    flexDirection: "row",
+    marginBottom: 10,
+  },
+  ratingButton: {
+    marginRight: 4,
+    padding: 2,
+  },
+  reviewInput: {
+    minHeight: 90,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: "#111827",
+    textAlignVertical: "top",
+  },
+  reviewError: {
+    marginTop: 8,
+    fontSize: 12,
+    color: "#B00020",
+  },
+  reviewSuccess: {
+    marginTop: 8,
+    fontSize: 12,
+    color: "#0A8F43",
   },
   modalSecondaryButton: {
     borderRadius: 14,
@@ -579,6 +894,7 @@ const styles = StyleSheet.create({
   modalCloseButton: {
     borderRadius: 16,
     backgroundColor: "#F4C430",
+    paddingHorizontal: 14,
     paddingVertical: 10,
     alignItems: "center",
   },

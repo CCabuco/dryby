@@ -12,6 +12,7 @@ service cloud.firestore {
     function reviewKeysValid(data) {
       return data.keys().hasAll([
         "shopId",
+        "orderId",
         "userUid",
         "userName",
         "rating",
@@ -21,6 +22,7 @@ service cloud.firestore {
       ]) &&
       data.keys().hasOnly([
         "shopId",
+        "orderId",
         "userUid",
         "userName",
         "rating",
@@ -30,16 +32,22 @@ service cloud.firestore {
       ]);
     }
 
-    function reviewPayloadValid(data, shopId) {
+    function reviewPayloadValid(data, shopId, orderId) {
       return reviewKeysValid(data)
         && data.shopId == shopId
+        && data.orderId == orderId
         && data.userUid == request.auth.uid
         && data.userName is string
         && data.userName.size() >= 2
         && data.userName.size() <= 80
         && data.comment is string
-        && data.comment.size() >= 5
         && data.comment.size() <= 500
+        && data.comment.size() >= 0
+        && exists(/databases/$(database)/documents/laundryShops/$(shopId)/orders/$(orderId))
+        && get(/databases/$(database)/documents/laundryShops/$(shopId)/orders/$(orderId)).data.customerUid == request.auth.uid
+        && get(/databases/$(database)/documents/laundryShops/$(shopId)/orders/$(orderId)).data.status == "completed"
+        && get(/databases/$(database)/documents/laundryShops/$(shopId)/orders/$(orderId)).data.completedAt is timestamp
+        && request.time <= get(/databases/$(database)/documents/laundryShops/$(shopId)/orders/$(orderId)).data.completedAt + duration.value(7, "d")
         && (data.rating is int || data.rating is float)
         && data.rating >= 1
         && data.rating <= 5;
@@ -58,6 +66,13 @@ service cloud.firestore {
         && exists(
           /databases/$(database)/documents/laundryShops/$(shopId)/reviewEligibleUsers/$(request.auth.uid)
         );
+    }
+
+    function isTransactionShopOwner() {
+      return signedIn()
+        && resource.data.shopId is string
+        && exists(/databases/$(database)/documents/laundryShops/$(resource.data.shopId))
+        && shopOwnerUid(resource.data.shopId) == request.auth.uid;
     }
 
     // User profile
@@ -87,24 +102,16 @@ service cloud.firestore {
         allow delete: if isShopOwner(shopId);
       }
 
-      // Real user reviews only (1 review per user per shop)
+      // Real user reviews only (1 review per completed order, within 7 days)
       match /reviews/{reviewId} {
         allow read: if true;
 
         allow create: if verifiedUser()
-          && canReviewShop(shopId)
-          && reviewId == request.auth.uid
-          && reviewPayloadValid(request.resource.data, shopId)
+          && reviewPayloadValid(request.resource.data, shopId, reviewId)
           && request.resource.data.createdAt == request.time
           && request.resource.data.updatedAt == request.time;
 
-        allow update: if verifiedUser()
-          && canReviewShop(shopId)
-          && reviewId == request.auth.uid
-          && resource.data.userUid == request.auth.uid
-          && reviewPayloadValid(request.resource.data, shopId)
-          && request.resource.data.createdAt == resource.data.createdAt
-          && request.resource.data.updatedAt == request.time;
+        allow update: if false;
 
         allow delete: if false;
       }
@@ -134,7 +141,8 @@ service cloud.firestore {
     // User-facing transaction history
     match /transactions/{transactionId} {
       allow create: if signedIn() && request.resource.data.userUid == request.auth.uid;
-      allow read, update: if signedIn() && resource.data.userUid == request.auth.uid;
+      allow read: if signedIn() && resource.data.userUid == request.auth.uid;
+      allow update: if signedIn() && (resource.data.userUid == request.auth.uid || isTransactionShopOwner());
       allow delete: if false;
     }
 

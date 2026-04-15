@@ -568,6 +568,12 @@ export default function AccountScreen() {
   }, [user]);
 
   const maskedEmail = useMemo(() => maskEmail(email), [email]);
+  const canChangePassword = useMemo(() => {
+    if (!user) {
+      return false;
+    }
+    return user.providerData.some((provider) => provider.providerId === "password");
+  }, [user]);
   const usernameCooldownMsLeft = useMemo(() => {
     if (!usernameLastChangedAt) {
       return 0;
@@ -1233,16 +1239,20 @@ export default function AccountScreen() {
               </View>
               <View style={styles.infoRow}>
                 <Text style={styles.label}>Password:</Text>
-                <TouchableOpacity
-                  onPress={() =>
-                    router.push({
-                      pathname: "/forgot-password",
-                      params: { from: "account" },
-                    })
-                  }
-                >
-                  <Text style={styles.link}>Change password</Text>
-                </TouchableOpacity>
+                {canChangePassword ? (
+                  <TouchableOpacity
+                    onPress={() =>
+                      router.push({
+                        pathname: "/forgot-password",
+                        params: { from: "account" },
+                      })
+                    }
+                  >
+                    <Text style={styles.link}>Change password</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={styles.value}>Managed by Google Sign-In</Text>
+                )}
               </View>
             </View>
 
