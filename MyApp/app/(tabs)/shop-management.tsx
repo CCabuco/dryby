@@ -1,5 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
+import Slider from "@react-native-community/slider";
 import {
   addDoc,
   collection,
@@ -240,6 +241,30 @@ function parseTimeInput(value: string, fallback: string): string {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(normalized) ? normalized : fallback;
 }
 
+function toTimeSliderIndex(value: string, fallback: string): number {
+  const normalized = parseTimeInput(value, fallback);
+  const [hourText, minuteText] = normalized.split(":");
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const slot = hour * 2 + (minute >= 30 ? 1 : 0);
+  return Math.max(0, Math.min(TIME_OPTIONS.length - 1, slot));
+}
+
+function toTimeFromSliderIndex(value: number): string {
+  const safe = Math.max(0, Math.min(TIME_OPTIONS.length - 1, Math.round(value)));
+  return TIME_OPTIONS[safe] ?? "00:00";
+}
+
+function formatTimeValueLabel(value: string): string {
+  const normalized = parseTimeInput(value, "00:00");
+  const [hourText, minuteText] = normalized.split(":");
+  const hour24 = Number(hourText);
+  const minute = Number(minuteText);
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${hour12}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
 function splitPipeText(value: string): string[] {
   return value
     .split("|")
@@ -374,8 +399,8 @@ export default function ShopManagementScreen() {
   const [serviceDescription, setServiceDescription] = useState("");
   const [serviceActions, setServiceActions] = useState<ServiceActionState>(DEFAULT_SERVICE_ACTIONS);
 
-  const [newWindowStartHour, setNewWindowStartHour] = useState("9");
-  const [newWindowEndHour, setNewWindowEndHour] = useState("12");
+  const [newWindowStartHour, setNewWindowStartHour] = useState(9);
+  const [newWindowEndHour, setNewWindowEndHour] = useState(12);
   const [newWindowService, setNewWindowService] = useState<ServiceSpeed>("standard");
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [pickupWindowEditorId, setPickupWindowEditorId] = useState<string | null>(null);
@@ -531,8 +556,8 @@ export default function ShopManagementScreen() {
   const openAddPickupWindowDialog = () => {
     clearMessages();
     setPickupWindowEditorId(null);
-    setNewWindowStartHour("9");
-    setNewWindowEndHour("12");
+    setNewWindowStartHour(9);
+    setNewWindowEndHour(12);
     setNewWindowService("standard");
     setIsPickupWindowDialogOpen(true);
   };
@@ -554,8 +579,8 @@ export default function ShopManagementScreen() {
 
     clearMessages();
     setPickupWindowEditorId(target.id);
-    setNewWindowStartHour(String(target.startHour));
-    setNewWindowEndHour(String(target.endHour));
+    setNewWindowStartHour(target.startHour);
+    setNewWindowEndHour(target.endHour);
     setNewWindowService(target.forService);
     setIsPickupWindowDialogOpen(true);
   };
@@ -923,12 +948,8 @@ export default function ShopManagementScreen() {
 
     clearMessages();
 
-    const startHour = Number(newWindowStartHour);
-    const endHour = Number(newWindowEndHour);
-    if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) {
-      setErrorText("Window hours must be numeric.");
-      return;
-    }
+    const startHour = newWindowStartHour;
+    const endHour = newWindowEndHour;
 
     if (startHour < 0 || startHour > 23 || endHour <= startHour || endHour > 24) {
       setErrorText("Invalid window range. Example: 9 to 12.");
@@ -1992,9 +2013,11 @@ export default function ShopManagementScreen() {
 
               {activeProfileEditor === "address" ? (
                 <>
-                  <Text style={styles.stepPill}>Step {addressStep} of {totalShopAddressSteps}</Text>
+                  {!hasShop ? (
+                    <Text style={styles.stepPill}>Step {addressStep} of {totalShopAddressSteps}</Text>
+                  ) : null}
 
-                  {addressStep === 1 ? (
+                  {hasShop || addressStep === 1 ? (
                     <>
                       <Text style={styles.fieldLabel}>House/Unit/Building *</Text>
                       <TextInput
@@ -2006,7 +2029,7 @@ export default function ShopManagementScreen() {
                     </>
                   ) : null}
 
-                  {addressStep === 2 ? (
+                  {hasShop || addressStep === 2 ? (
                     <>
                       <Text style={styles.fieldLabel}>Street *</Text>
                       <TextInput
@@ -2018,7 +2041,7 @@ export default function ShopManagementScreen() {
                     </>
                   ) : null}
 
-                  {addressStep === 3 ? (
+                  {hasShop || addressStep === 3 ? (
                     <>
                       <Text style={styles.fieldLabel}>Barangay *</Text>
                       <TextInput
@@ -2030,7 +2053,7 @@ export default function ShopManagementScreen() {
                     </>
                   ) : null}
 
-                  {addressStep === 4 ? (
+                  {hasShop || addressStep === 4 ? (
                     <View style={styles.twoColumn}>
                       <View style={styles.columnItem}>
                         <Text style={styles.fieldLabel}>Province *</Text>
@@ -2076,7 +2099,7 @@ export default function ShopManagementScreen() {
                     </View>
                   ) : null}
 
-                  {addressStep === 5 ? (
+                  {hasShop || addressStep === 5 ? (
                     <View style={styles.twoColumn}>
                       <View style={styles.columnItem}>
                         <Text style={styles.fieldLabel}>ZIP Code *</Text>
@@ -2101,7 +2124,7 @@ export default function ShopManagementScreen() {
                     </View>
                   ) : null}
 
-                  {addressStep === 6 ? (
+                  {hasShop || addressStep === 6 ? (
                     <>
                       <Text style={styles.fieldLabel}>Pin Location</Text>
                       <Text style={styles.cardHint}>{shopLocationSummary}</Text>
@@ -2136,20 +2159,22 @@ export default function ShopManagementScreen() {
                     </>
                   ) : null}
 
-                  <View style={styles.addressStepControls}>
-                    <TouchableOpacity
-                      style={[styles.stepButton, addressStep === 1 && styles.stepButtonDisabled]}
-                      disabled={addressStep === 1}
-                      onPress={goToPreviousAddressStep}
-                    >
-                      <Text style={styles.stepButtonText}>Back</Text>
-                    </TouchableOpacity>
-                    {addressStep < totalShopAddressSteps ? (
-                      <TouchableOpacity style={styles.stepButtonPrimary} onPress={goToNextAddressStep}>
-                        <Text style={styles.stepButtonPrimaryText}>Next</Text>
+                  {!hasShop ? (
+                    <View style={styles.addressStepControls}>
+                      <TouchableOpacity
+                        style={[styles.stepButton, addressStep === 1 && styles.stepButtonDisabled]}
+                        disabled={addressStep === 1}
+                        onPress={goToPreviousAddressStep}
+                      >
+                        <Text style={styles.stepButtonText}>Back</Text>
                       </TouchableOpacity>
-                    ) : null}
-                  </View>
+                      {addressStep < totalShopAddressSteps ? (
+                        <TouchableOpacity style={styles.stepButtonPrimary} onPress={goToNextAddressStep}>
+                          <Text style={styles.stepButtonPrimaryText}>Next</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  ) : null}
                 </>
               ) : null}
 
@@ -2158,19 +2183,61 @@ export default function ShopManagementScreen() {
                   <View style={styles.twoColumn}>
                     <View style={styles.columnItem}>
                       <Text style={styles.fieldLabel}>Opening (HH:mm) *</Text>
-                      <TextInput style={styles.input} value={shopDraft.openingTime} onChangeText={(value) => handleShopField("openingTime", value)} />
+                      <Text style={styles.sliderValueLabel}>
+                        {formatTimeValueLabel(shopDraft.openingTime)}
+                      </Text>
+                      <Slider
+                        minimumValue={0}
+                        maximumValue={TIME_OPTIONS.length - 1}
+                        step={1}
+                        minimumTrackTintColor="#38BDF8"
+                        maximumTrackTintColor="#BFDBFE"
+                        thumbTintColor="#0B6394"
+                        value={toTimeSliderIndex(shopDraft.openingTime, "08:00")}
+                        onValueChange={(value) =>
+                          handleShopField("openingTime", toTimeFromSliderIndex(value))
+                        }
+                      />
                       <Text style={styles.requiredHint}>Required</Text>
                     </View>
                     <View style={styles.columnItem}>
                       <Text style={styles.fieldLabel}>Closing (HH:mm) *</Text>
-                      <TextInput style={styles.input} value={shopDraft.closingTime} onChangeText={(value) => handleShopField("closingTime", value)} />
+                      <Text style={styles.sliderValueLabel}>
+                        {formatTimeValueLabel(shopDraft.closingTime)}
+                      </Text>
+                      <Slider
+                        minimumValue={0}
+                        maximumValue={TIME_OPTIONS.length - 1}
+                        step={1}
+                        minimumTrackTintColor="#38BDF8"
+                        maximumTrackTintColor="#BFDBFE"
+                        thumbTintColor="#0B6394"
+                        value={toTimeSliderIndex(shopDraft.closingTime, "19:00")}
+                        onValueChange={(value) =>
+                          handleShopField("closingTime", toTimeFromSliderIndex(value))
+                        }
+                      />
                       <Text style={styles.requiredHint}>Required</Text>
                     </View>
                   </View>
                   <View style={styles.twoColumn}>
                     <View style={styles.columnItem}>
                       <Text style={styles.fieldLabel}>Same-day cutoff (HH:mm) *</Text>
-                      <TextInput style={styles.input} value={shopDraft.standardCutoffTime} onChangeText={(value) => handleShopField("standardCutoffTime", value)} />
+                      <Text style={styles.sliderValueLabel}>
+                        {formatTimeValueLabel(shopDraft.standardCutoffTime)}
+                      </Text>
+                      <Slider
+                        minimumValue={0}
+                        maximumValue={TIME_OPTIONS.length - 1}
+                        step={1}
+                        minimumTrackTintColor="#38BDF8"
+                        maximumTrackTintColor="#BFDBFE"
+                        thumbTintColor="#0B6394"
+                        value={toTimeSliderIndex(shopDraft.standardCutoffTime, "19:00")}
+                        onValueChange={(value) =>
+                          handleShopField("standardCutoffTime", toTimeFromSliderIndex(value))
+                        }
+                      />
                       <Text style={styles.requiredHint}>Required</Text>
                     </View>
                     <View style={styles.columnItem}>
@@ -2326,9 +2393,17 @@ export default function ShopManagementScreen() {
                     styles.flexButton,
                     styles.dialogPrimaryButton,
                     isSavingShop && styles.buttonDisabled,
-                    activeProfileEditor === "address" && addressStep < totalShopAddressSteps && styles.buttonDisabled,
+                    activeProfileEditor === "address" &&
+                    !hasShop &&
+                    addressStep < totalShopAddressSteps &&
+                    styles.buttonDisabled,
                   ]}
-                  disabled={isSavingShop || (activeProfileEditor === "address" && addressStep < totalShopAddressSteps)}
+                  disabled={
+                    isSavingShop ||
+                    (activeProfileEditor === "address" &&
+                      !hasShop &&
+                      addressStep < totalShopAddressSteps)
+                  }
                   onPress={() => void saveActiveProfileEditor()}
                 >
                   <Text style={styles.primaryButtonText}>
@@ -2393,20 +2468,42 @@ export default function ShopManagementScreen() {
               <View style={styles.twoColumn}>
                 <View style={styles.columnItem}>
                   <Text style={styles.fieldLabel}>Start hour</Text>
-                  <TextInput
-                    style={styles.input}
+                  <Text style={styles.sliderValueLabel}>
+                    {formatHourLabel(newWindowStartHour)}
+                  </Text>
+                  <Slider
+                    minimumValue={0}
+                    maximumValue={23}
+                    step={1}
+                    minimumTrackTintColor="#38BDF8"
+                    maximumTrackTintColor="#BFDBFE"
+                    thumbTintColor="#0B6394"
                     value={newWindowStartHour}
-                    keyboardType="number-pad"
-                    onChangeText={(value) => setNewWindowStartHour(value.replace(/\D/g, ""))}
+                    onValueChange={(value) => {
+                      const nextStart = Math.round(value);
+                      setNewWindowStartHour(nextStart);
+                      if (newWindowEndHour <= nextStart) {
+                        setNewWindowEndHour(Math.min(24, nextStart + 1));
+                      }
+                    }}
                   />
                 </View>
                 <View style={styles.columnItem}>
                   <Text style={styles.fieldLabel}>End hour</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={newWindowEndHour}
-                    keyboardType="number-pad"
-                    onChangeText={(value) => setNewWindowEndHour(value.replace(/\D/g, ""))}
+                  <Text style={styles.sliderValueLabel}>
+                    {formatHourLabel(newWindowEndHour)}
+                  </Text>
+                  <Slider
+                    minimumValue={Math.min(24, newWindowStartHour + 1)}
+                    maximumValue={24}
+                    step={1}
+                    minimumTrackTintColor="#38BDF8"
+                    maximumTrackTintColor="#BFDBFE"
+                    thumbTintColor="#0B6394"
+                    value={Math.max(newWindowEndHour, Math.min(24, newWindowStartHour + 1))}
+                    onValueChange={(value) =>
+                      setNewWindowEndHour(Math.max(Math.round(value), newWindowStartHour + 1))
+                    }
                   />
                 </View>
               </View>
@@ -2804,6 +2901,7 @@ const styles = StyleSheet.create({
   cardHint: { marginBottom: 8, fontSize: 12, color: "#475569" },
   fieldLabel: { marginTop: 8, fontSize: 12, fontWeight: "700", color: "#334155" },
   requiredHint: { marginTop: 4, fontSize: 11, color: "#64748B" },
+  sliderValueLabel: { marginTop: 6, fontSize: 13, fontWeight: "700", color: "#0F172A" },
   input: { marginTop: 6, borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 12, minHeight: 46, paddingHorizontal: 12, fontSize: 14, color: "#0F172A", backgroundColor: "#FFFFFF" },
   readOnlyInput: { backgroundColor: "#F1F5F9" },
   inputButton: {

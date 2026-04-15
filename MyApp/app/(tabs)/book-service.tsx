@@ -391,6 +391,7 @@ export default function BookServiceScreen() {
   const [isLoadingSavedAddress, setIsLoadingSavedAddress] = useState(false);
   const [loadCategory, setLoadCategory] = useState<LoadCategory | "">("");
   const [selectedLoadServiceIds, setSelectedLoadServiceIds] = useState<string[]>([]);
+  const [serviceConflictMessage, setServiceConflictMessage] = useState("");
 
   const [bookingDate, setBookingDate] = useState(formatYmd(today));
   const [selectedStandardWindow, setSelectedStandardWindow] = useState("");
@@ -479,6 +480,10 @@ export default function BookServiceScreen() {
       return scope === "both" || scope === loadCategory;
     });
   }, [shopServices, loadCategory]);
+  const selectableServiceMap = useMemo(
+    () => new Map(selectableServices.map((service) => [service.id, service])),
+    [selectableServices]
+  );
   const selectedLoadServiceNames = useMemo(
     () =>
       selectableServices
@@ -486,6 +491,34 @@ export default function BookServiceScreen() {
         .map((service) => service.serviceName),
     [selectableServices, selectedLoadServiceIds]
   );
+  const serviceConflictMap = useMemo(() => {
+    const selectedSet = new Set(selectedLoadServiceIds);
+    const selectedServices = selectableServices.filter((service) => selectedSet.has(service.id));
+    const nextMap: Record<string, { isDisabled: boolean; overlapActions: string[] }> = {};
+
+    selectableServices.forEach((service) => {
+      if (selectedSet.has(service.id)) {
+        nextMap[service.id] = { isDisabled: false, overlapActions: [] };
+        return;
+      }
+
+      const overlapActions = new Set<string>();
+      selectedServices.forEach((selectedService) => {
+        selectedService.actions.forEach((action) => {
+          if (service.actions.includes(action)) {
+            overlapActions.add(action);
+          }
+        });
+      });
+
+      nextMap[service.id] = {
+        isDisabled: overlapActions.size > 0,
+        overlapActions: Array.from(overlapActions),
+      };
+    });
+
+    return nextMap;
+  }, [selectableServices, selectedLoadServiceIds]);
   const openingHour = selectedShop
     ? Number(selectedShop.openingTime.split(":")[0] ?? ORDER_START_HOUR)
     : ORDER_START_HOUR;
@@ -860,17 +893,69 @@ export default function BookServiceScreen() {
       return;
     }
     setSelectedLoadServiceIds((previous) => {
-      const enabledIds = selectableServices.map((service) => service.id);
-      return previous.filter((id) => enabledIds.includes(id));
+      const byId = new Map(selectableServices.map((service) => [service.id, service]));
+      const next: string[] = [];
+
+      previous.forEach((id) => {
+        const current = byId.get(id);
+        if (!current) {
+          return;
+        }
+
+        const overlapsExisting = next.some((existingId) => {
+          const existing = byId.get(existingId);
+          return existing ? existing.actions.some((action) => current.actions.includes(action)) : false;
+        });
+
+        if (!overlapsExisting) {
+          next.push(id);
+        }
+      });
+
+      return next;
     });
   }, [loadCategory, selectedShop, selectableServices]);
 
+  React.useEffect(() => {
+    setServiceConflictMessage("");
+  }, [loadCategory]);
+
   const toggleLoadService = (serviceId: string) => {
-    setSelectedLoadServiceIds((previous) =>
-      previous.includes(serviceId)
-        ? previous.filter((id) => id !== serviceId)
-        : [...previous, serviceId]
-    );
+    setSelectedLoadServiceIds((previous) => {
+      if (previous.includes(serviceId)) {
+        setServiceConflictMessage("");
+        return previous.filter((id) => id !== serviceId);
+      }
+
+      const candidate = selectableServiceMap.get(serviceId);
+      if (!candidate) {
+        return previous;
+      }
+
+      const selectedServices = previous
+        .map((id) => selectableServiceMap.get(id))
+        .filter((service): service is LaundryService => !!service);
+      const overlapActions = Array.from(
+        new Set(
+          selectedServices.flatMap((service) =>
+            service.actions.filter((action) => candidate.actions.includes(action))
+          )
+        )
+      );
+
+      if (overlapActions.length) {
+        const readableActions = overlapActions
+          .map((action) => `${action.charAt(0).toUpperCase()}${action.slice(1)}`)
+          .join(", ");
+        setServiceConflictMessage(
+          `${candidate.serviceName} overlaps with selected function(s): ${readableActions}.`
+        );
+        return previous;
+      }
+
+      setServiceConflictMessage("");
+      return [...previous, serviceId];
+    });
   };
 
   const getCalendarLimits = (): { min: Date; max: Date } => {
@@ -1542,39 +1627,57 @@ export default function BookServiceScreen() {
                   </View>
                 </View>
 
-                <View style={styles.loadServicesSection}>
-                  <Text style={[styles.sectionTitle, styles.loadSectionTitle]}>Services</Text>
-                  <Text style={styles.helperText}>
-                    Select the services you want for this load.
-                  </Text>
-
-                  {selectableServices.length ? (
-                    <View style={styles.chipGroup}>
-                      {selectableServices.map((service) => {
-                        const selected = selectedLoadServiceIds.includes(service.id);
-                        return (
-                          <TouchableOpacity
-                            key={service.id}
-                            style={[styles.chip, selected && styles.chipActive]}
-                            onPress={() => toggleLoadService(service.id)}
-                          >
-                            <Text style={[styles.chipText, selected && styles.chipTextActive]}>
-                              {service.serviceName}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  ) : (
-                    <Text style={styles.helperText}>No enabled services configured yet.</Text>
-                  )}
-
-                  {selectedLoadServiceNames.length ? (
+                {loadCategory ? (
+                  <View style={styles.loadServicesSection}>
+                    <Text style={[styles.sectionTitle, styles.loadSectionTitle]}>Services</Text>
                     <Text style={styles.helperText}>
-                      Selected services: {selectedLoadServiceNames.join(" + ")}
+                      Select the services you want for this load.
                     </Text>
-                  ) : null}
-                </View>
+
+                    {selectableServices.length ? (
+                      <View style={styles.chipGroup}>
+                        {selectableServices.map((service) => {
+                          const selected = selectedLoadServiceIds.includes(service.id);
+                          const conflictState = serviceConflictMap[service.id];
+                          const disabled = !selected && !!conflictState?.isDisabled;
+                          return (
+                            <TouchableOpacity
+                              key={service.id}
+                              style={[
+                                styles.chip,
+                                selected && styles.chipActive,
+                                disabled && styles.chipDisabled,
+                              ]}
+                              onPress={() => toggleLoadService(service.id)}
+                              disabled={disabled}
+                            >
+                              <Text
+                                style={[
+                                  styles.chipText,
+                                  selected && styles.chipTextActive,
+                                  disabled && styles.chipTextDisabled,
+                                ]}
+                              >
+                                {service.serviceName}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    ) : (
+                      <Text style={styles.helperText}>No enabled services configured yet.</Text>
+                    )}
+
+                    {selectedLoadServiceNames.length ? (
+                      <Text style={styles.helperText}>
+                        Selected services: {selectedLoadServiceNames.join(" + ")}
+                      </Text>
+                    ) : null}
+                    {!!serviceConflictMessage ? (
+                      <Text style={styles.errorText}>{serviceConflictMessage}</Text>
+                    ) : null}
+                  </View>
+                ) : null}
 
               </>
             )}

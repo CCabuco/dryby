@@ -1713,7 +1713,10 @@ export default function AccountScreen() {
                     </Text>
                   ) : null}
 
-                  {isAnyEditorOpen && (!isAddressEditorOpen || addressStep === totalAddressSteps) ? (
+                  {isAnyEditorOpen &&
+                  (!isAddressEditorOpen ||
+                    isEditingExistingAddress ||
+                    addressStep === totalAddressSteps) ? (
                     <TouchableOpacity
                       style={[styles.saveBtn, isSaving && styles.disabledBtn]}
                       disabled={isSaving}
