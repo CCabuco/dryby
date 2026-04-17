@@ -473,7 +473,7 @@ export default function BookServiceScreen() {
   const selectableServices = useMemo(() => {
     const activeServices = shopServices.filter((service) => service.enabled);
     if (!loadCategory) {
-      return activeServices;
+      return [];
     }
     return activeServices.filter((service) => {
       const scope = service.loadScope ?? "both";
@@ -1426,21 +1426,7 @@ export default function BookServiceScreen() {
         updatedAt: serverTimestamp(),
       });
       setSuccessMessage(`${readyMessage}${savedNotice} Booking placed successfully.`);
-      setLoadCategory("");
-      setSelectedLoadServiceIds([]);
-      setSelectedServiceType("");
-      setSelectedStandardWindow("");
-      setPickupMode("now");
-      setSelectedExpressSlot("");
-      setBookingDate(formatYmd(today));
-      setDeliveryDate(formatYmd(today));
-      setAddressMode(savedAddress.trim() ? "saved" : "new");
-      setHouseUnit("");
-      setStreetName("");
-      setBarangay("");
-      setCityMunicipality("");
-      setProvince("");
-      setZipCode("");
+      resetBookingSetup();
       setIsConfirmOpen(false);
       setConfirmPayload(null);
       router.replace("/(tabs)/transactions");
@@ -1495,6 +1481,7 @@ export default function BookServiceScreen() {
     );
 
     setSuccessMessage("Added to cart. You can continue as guest or log in later.");
+    resetBookingSetup();
     router.push("/(tabs)/cart");
   };
 
@@ -1504,6 +1491,32 @@ export default function BookServiceScreen() {
     !!loadCategory &&
     !!selectedServiceType &&
     selectedLoadServiceIds.length > 0;
+
+  const resetBookingSetup = () => {
+    const hasSaved = savedAddresses.length > 0 || !!savedAddress.trim();
+    setBookingStep(1);
+    setLoadCategory("");
+    setSelectedLoadServiceIds([]);
+    setSelectedServiceType("");
+    setSelectedStandardWindow("");
+    setPickupMode("now");
+    setSelectedExpressSlot("");
+    setBookingDate(formatYmd(today));
+    setDeliveryDate(formatYmd(today));
+    setAddressMode(hasSaved ? "saved" : "new");
+    setSelectedSavedAddressId(hasSaved ? selectedSavedAddressId : null);
+    setAddressStep(1);
+    setHouseUnit("");
+    setStreetName("");
+    setBarangay("");
+    setCityMunicipality("");
+    setProvince("");
+    setZipCode("");
+    setSelectedCoordinates(hasSaved ? savedCoordinates : null);
+    setCalendarField(null);
+    setDropdownType(null);
+    setServiceConflictMessage("");
+  };
   const bottomActionOffset = Math.max(
     tabBarHeight - 36,
     Platform.OS === "ios" ? 22 : 14

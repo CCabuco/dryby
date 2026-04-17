@@ -234,6 +234,17 @@ export default function TransactionsScreen() {
     };
   }, [selectedTransaction?.shopId, selectedTransaction?.orderId]);
 
+  useEffect(() => {
+    if (!selectedTransaction) {
+      return;
+    }
+
+    const latest = transactions.find((item) => item.id === selectedTransaction.id);
+    if (latest) {
+      setSelectedTransaction(latest);
+    }
+  }, [selectedTransaction, transactions]);
+
   const hasTransactions = useMemo(() => transactions.length > 0, [transactions.length]);
   const statusFlow = STATUS_FLOW;
   const currentStatusIndex = useMemo(() => {
@@ -245,7 +256,7 @@ export default function TransactionsScreen() {
     return index === -1 ? 0 : index;
   }, [selectedTransaction, statusFlow]);
 
-  const isCompleted = selectedTransaction?.status === "completed";
+  const isCompleted = normalizeStatus(selectedTransaction?.status || "") === "completed";
   const hasCompletionTimestamp = typeof selectedTransaction?.completedAtMs === "number";
   const reviewWindowEndMs = selectedTransaction?.completedAtMs
     ? selectedTransaction.completedAtMs + REVIEW_WINDOW_MS

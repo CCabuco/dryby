@@ -1300,23 +1300,23 @@ export default function ShopManagementScreen() {
         updatedAt: serverTimestamp(),
       });
 
-      if (order.customerUid) {
-        const transactionSnapshot = await getDocs(
-          query(
-            collection(db, "transactions"),
-            where("shopId", "==", shopId),
-            where("userUid", "==", order.customerUid),
-            where("orderId", "==", order.id),
-            limit(1)
+      const transactionSnapshot = await getDocs(
+        query(
+          collection(db, "transactions"),
+          where("shopId", "==", shopId),
+          where("orderId", "==", order.id)
+        )
+      );
+      if (!transactionSnapshot.empty) {
+        await Promise.all(
+          transactionSnapshot.docs.map((transactionDoc) =>
+            updateDoc(transactionDoc.ref, {
+              status: nextStatus,
+              completedAt: completedAtField,
+              updatedAt: serverTimestamp(),
+            })
           )
         );
-        if (!transactionSnapshot.empty) {
-          await updateDoc(transactionSnapshot.docs[0].ref, {
-            status: nextStatus,
-            completedAt: completedAtField,
-            updatedAt: serverTimestamp(),
-          });
-        }
       }
 
       if (nextStatus === "completed" && order.customerUid) {
@@ -1437,23 +1437,23 @@ export default function ShopManagementScreen() {
         completedAt: completedAtField,
         updatedAt: serverTimestamp(),
       });
-      if (selectedOrder?.customerUid) {
-        const transactionSnapshot = await getDocs(
-          query(
-            collection(db, "transactions"),
-            where("shopId", "==", shopId),
-            where("userUid", "==", selectedOrder.customerUid),
-            where("orderId", "==", bookingEditorId),
-            limit(1)
+      const transactionSnapshot = await getDocs(
+        query(
+          collection(db, "transactions"),
+          where("shopId", "==", shopId),
+          where("orderId", "==", bookingEditorId)
+        )
+      );
+      if (!transactionSnapshot.empty) {
+        await Promise.all(
+          transactionSnapshot.docs.map((transactionDoc) =>
+            updateDoc(transactionDoc.ref, {
+              status: bookingStatus,
+              completedAt: completedAtField,
+              updatedAt: serverTimestamp(),
+            })
           )
         );
-        if (!transactionSnapshot.empty) {
-          await updateDoc(transactionSnapshot.docs[0].ref, {
-            status: bookingStatus,
-            completedAt: completedAtField,
-            updatedAt: serverTimestamp(),
-          });
-        }
       }
       setSuccessText("Demo booking updated.");
       closeBookingDialog();

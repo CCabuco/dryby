@@ -1,9 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { collection, collectionGroup, getDoc, onSnapshot } from "firebase/firestore";
+import { collection, collectionGroup, doc, getDoc, onSnapshot } from "firebase/firestore";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -16,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { isGuestMode } from "../../lib/app-state";
 import { auth, db } from "../../lib/firebase";
 import { isShopCurrentlyOpen, parseLaundryShop, type LaundryShop } from "../../lib/laundry-shops";
@@ -72,6 +74,8 @@ function haversineKm(
 }
 
 export default function HomeScreen() {
+  const tabBarHeight = useBottomTabBarHeight();
+  const insets = useSafeAreaInsets();
   const [guestMode, setGuestMode] = useState(false);
   const [user, setUser] = useState<User | null>(auth.currentUser);
   const [missingContactMessage, setMissingContactMessage] = useState("");
@@ -86,6 +90,29 @@ export default function HomeScreen() {
   const [filterNearbyOnly, setFilterNearbyOnly] = useState(false);
   const [filterLowestPrice, setFilterLowestPrice] = useState(false);
   const isLoggedIn = !!user;
+
+  const getCurrentDeviceCoordinates = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      return null;
+    }
+
+    return await new Promise<{ latitude: number; longitude: number } | null>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+        },
+        () => resolve(null),
+        {
+          enableHighAccuracy: true,
+          timeout: 8000,
+          maximumAge: 60000,
+        }
+      );
+    });
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
@@ -177,7 +204,8 @@ export default function HomeScreen() {
     const currentUser = auth.currentUser;
     if (!currentUser) {
       setMissingContactMessage("");
-      setUserCoordinates(null);
+      const currentCoordinates = await getCurrentDeviceCoordinates();
+      setUserCoordinates(currentCoordinates);
       return;
     }
 
@@ -214,13 +242,15 @@ export default function HomeScreen() {
       if (typeof latitude === "number" && typeof longitude === "number") {
         setUserCoordinates({ latitude, longitude });
       } else {
-        setUserCoordinates(null);
+        const currentCoordinates = await getCurrentDeviceCoordinates();
+        setUserCoordinates(currentCoordinates);
       }
     } catch {
       setMissingContactMessage("");
-      setUserCoordinates(null);
+      const currentCoordinates = await getCurrentDeviceCoordinates();
+      setUserCoordinates(currentCoordinates);
     }
-  }, []);
+  }, [getCurrentDeviceCoordinates]);
 
   useFocusEffect(
     useCallback(() => {
@@ -230,6 +260,28 @@ export default function HomeScreen() {
 
   const greeting = useMemo(() => getGreeting(), []);
   const userName = user?.displayName?.split(" ")[0] || "there";
+  const getShopDistanceKm = useCallback(
+    (shop: LaundryShop): number | null => {
+      const overrideDistance = distanceOverrides[shop.id]?.distanceKm;
+      if (typeof overrideDistance === "number" && Number.isFinite(overrideDistance)) {
+        return Math.max(0, overrideDistance);
+      }
+
+      if (!userCoordinates) {
+        return null;
+      }
+
+      const { latitude, longitude } = shop.addressFields ?? {};
+      if (typeof latitude !== "number" || typeof longitude !== "number") {
+        return null;
+      }
+
+      const computedDistance = haversineKm(userCoordinates, { latitude, longitude });
+      return Number.isFinite(computedDistance) ? Math.max(0, computedDistance) : null;
+    },
+    [distanceOverrides, userCoordinates]
+  );
+
   const filteredLaundryShops = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
     let results = shops;
@@ -256,9 +308,8 @@ export default function HomeScreen() {
 
     if (filterNearbyOnly) {
       results = results.filter((shop) => {
-        const override = distanceOverrides[shop.id];
-        const distanceKm = override?.distanceKm ?? shop.distanceKm;
-        return distanceKm <= 3;
+        const distanceKm = getShopDistanceKm(shop);
+        return typeof distanceKm === "number" && distanceKm <= 3;
       });
     }
 
@@ -266,19 +317,28 @@ export default function HomeScreen() {
       results = [...results].sort((a, b) => a.priceRangeMin - b.priceRangeMin);
     } else {
       results = [...results].sort((a, b) => {
-        const distanceA = distanceOverrides[a.id]?.distanceKm ?? a.distanceKm;
-        const distanceB = distanceOverrides[b.id]?.distanceKm ?? b.distanceKm;
+        const distanceA = getShopDistanceKm(a);
+        const distanceB = getShopDistanceKm(b);
+        if (distanceA == null && distanceB == null) {
+          return 0;
+        }
+        if (distanceA == null) {
+          return 1;
+        }
+        if (distanceB == null) {
+          return -1;
+        }
         return distanceA - distanceB;
       });
     }
 
     return results;
   }, [
-    distanceOverrides,
     filterExpressOnly,
     filterLowestPrice,
     filterNearbyOnly,
     filterOpenOnly,
+    getShopDistanceKm,
     searchQuery,
     shops,
   ]);
@@ -411,8 +471,9 @@ export default function HomeScreen() {
                 const ratingAverage = reviewSummary?.average ?? 0;
                 const ratingCount = reviewSummary?.count ?? 0;
                 const distanceMeta = distanceOverrides[item.id];
-                const distanceKm = distanceMeta?.distanceKm ?? item.distanceKm;
+                const distanceKm = getShopDistanceKm(item);
                 const durationText = distanceMeta?.durationText ?? "";
+                const hasRealtimeDistance = typeof distanceKm === "number";
                 const isOpen = isShopCurrentlyOpen(item);
 
                 return (
@@ -444,7 +505,7 @@ export default function HomeScreen() {
                       </View>
 
                       <Text style={styles.shopAddress}>
-                        {distanceKm.toFixed(1)} km away
+                        {hasRealtimeDistance ? `${distanceKm.toFixed(1)} km away` : "Distance unavailable"}
                         {durationText ? ` • ${durationText}` : ""} | {item.address || "Address not set"}
                       </Text>
 
@@ -476,19 +537,25 @@ export default function HomeScreen() {
               </Text>
             )}
           </View>
-          <View style={styles.searchBarWrapper}>
-            <View style={styles.searchBar}>
-              <TextInput
-                placeholder="Search shops or services"
-                placeholderTextColor="rgba(255,255,255,0.82)"
-                style={styles.searchInput}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-              <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.9)" />
-            </View>
-          </View>
         </ScrollView>
+
+        <View
+          style={[
+            styles.searchBarWrapper,
+            { bottom: tabBarHeight + Math.max(insets.bottom, 8) + 8 },
+          ]}
+        >
+          <View style={styles.searchBar}>
+            <TextInput
+              placeholder="Search shops or services"
+              placeholderTextColor="rgba(255,255,255,0.82)"
+              style={styles.searchInput}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+            <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.9)" />
+          </View>
+        </View>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -506,7 +573,7 @@ const styles = StyleSheet.create({
   },
 
   scrollContent: {
-    paddingBottom: 140,
+    paddingBottom: 220,
   },
 
   headerRow: {
@@ -802,9 +869,11 @@ const styles = StyleSheet.create({
   },
 
   searchBarWrapper: {
-    marginHorizontal: 28,
-    marginTop: 18,
-    marginBottom: 10,
+    position: "absolute",
+    left: 28,
+    right: 28,
+    bottom: 84,
+    zIndex: 20,
   },
 
   searchBar: {
