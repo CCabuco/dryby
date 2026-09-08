@@ -658,7 +658,10 @@ export default function ShopManagementScreen() {
       contactNumber: shopDraft.contactNumber.trim(),
       address: buildAddressLabel(normalizedAddressFields),
       addressFields: normalizedAddressFields,
-      distanceKm: Number.isFinite(shopDraft.distanceKm) ? shopDraft.distanceKm : 0.9,
+      // distanceKm is no longer written. Distance depends on who is
+      // looking, so it is computed at display time from the viewer's
+      // coordinates. The previous hardcoded 0.9 km fallback is what made
+      // shops report a fixed, wrong distance (TC-020).
       openingTime: parseTimeInput(shopDraft.openingTime, "08:00"),
       closingTime: parseTimeInput(shopDraft.closingTime, "19:00"),
       standardCutoffTime: parseTimeInput(shopDraft.standardCutoffTime, "19:00"),

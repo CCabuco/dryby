@@ -6,9 +6,11 @@ import {
   GoogleAuthProvider,
   signInWithCredential,
   signInWithEmailAndPassword,
-  signInWithPopup, // <-- ADDED FOR WEB
+
+  signInWithRedirect,
+  getRedirectResult,
 } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -26,6 +28,90 @@ import { auth, db } from "../firebaseConfig";
 
 // This is required to make sure the browser closes after login on mobile
 WebBrowser.maybeCompleteAuthSession();
+
+/**
+ * Confirms the signed-in account has been granted the driver role by an
+ * administrator. The role lives on the user document and is not writable
+ * by the client, so this is a real check and not just a UI hint.
+ *
+ * Signs the user out and explains the specific reason when access is
+ * refused, so a rejected applicant, a customer who opened the wrong app,
+ * and someone still waiting for approval each see a different message.
+ */
+async function assertDriverRole(uid: string): Promise<boolean> {
+  try {
+    const userSnap = await getDoc(doc(db, "users", uid));
+
+    if (!userSnap.exists()) {
+      await auth.signOut();
+      Alert.alert(
+        "Account not found",
+        "We could not find a profile for this account. Please register as a driver first.",
+      );
+      return false;
+    }
+
+    const role =
+      ((userSnap.data() as Record<string, unknown>).role as string) || "";
+
+    if (role === "driver") {
+      return true;
+    }
+
+    // Not a driver. Work out why so the message is useful.
+    const requestSnap = await getDoc(doc(db, "driverRequests", uid));
+    const requestStatus = requestSnap.exists()
+      ? ((requestSnap.data() as Record<string, unknown>).status as string) || ""
+      : "";
+
+    await auth.signOut();
+
+    if (requestStatus === "pending") {
+      Alert.alert(
+        "Waiting for approval",
+        "Your driver application has been submitted but an administrator has not reviewed it yet. Please try again later.",
+      );
+    } else if (requestStatus === "rejected") {
+      Alert.alert(
+        "Application declined",
+        "Your driver application was not approved. Please contact the DryBy administrator if you think this is a mistake.",
+      );
+    } else if (role === "admin" || role === "super-admin") {
+      Alert.alert(
+        "Wrong app",
+        "This is an administrator account. Please use the DryBy admin dashboard instead of the driver app.",
+      );
+    } else if (role === "customer" || role === "") {
+      Alert.alert(
+        "Not a driver account",
+        "This account is registered as a customer. Please use the main DryBy app, or register here as a driver to apply.",
+      );
+    } else {
+      Alert.alert(
+        "Access denied",
+        `This account has the role "${role}", which cannot access the driver app.`,
+      );
+    }
+
+    return false;
+  } catch (error: any) {
+    console.error("Role check failed:", error);
+    await auth.signOut();
+
+    if (error?.code === "permission-denied") {
+      Alert.alert(
+        "Access denied",
+        "This account does not have permission to use the driver app.",
+      );
+    } else {
+      Alert.alert(
+        "Could not verify access",
+        "We could not confirm your driver access. Please check your connection and try again.",
+      );
+    }
+    return false;
+  }
+}
 
 export default function LoginScreen() {
   // Authentication states
@@ -62,17 +148,23 @@ export default function LoginScreen() {
       signInWithCredential(auth, credential)
         .then(async (userCredential) => {
           const user = userCredential.user;
-          // Merge basic info for Google users
+          // Merge basic info for Google users.
+          // NOTE: role is intentionally NOT written here. Roles are granted
+          // by an administrator only. See firestore.rules.
           await setDoc(
             doc(db, "users", user.uid),
             {
               email: user.email,
               name: user.displayName || "",
-              role: "driver",
               lastLogin: new Date().toISOString(),
             },
             { merge: true },
           );
+
+          const approved = await assertDriverRole(user.uid);
+          if (!approved) {
+            setLoading(false);
+          }
         })
         .catch((error) => {
           Alert.alert("Google Auth Failed", error.message);
@@ -81,27 +173,61 @@ export default function LoginScreen() {
     }
   }, [response]);
 
-  // --- THE SMART GOOGLE LOGIN HANDLER ---
-  const handleGoogleSignIn = async () => {
-    if (Platform.OS === "web") {
-      // 🌐 WEB FLOW: Bypass Expo and use native Firebase Popup
-      setLoading(true);
-      try {
-        const provider = new GoogleAuthProvider();
-        const result = await signInWithPopup(auth, provider);
-        const user = result.user;
+  // Completes a Google sign-in that used the web redirect flow. Runs when
+  // the browser returns from Google. Does nothing on a normal page load.
+  useEffect(() => {
+    let cancelled = false;
 
-        // Save user to Firestore just like mobile
+    const completeRedirectSignIn = async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (!result || cancelled) {
+          return;
+        }
+
+        const user = result.user;
         await setDoc(
           doc(db, "users", user.uid),
           {
             email: user.email,
             name: user.displayName || "",
-            role: "driver",
             lastLogin: new Date().toISOString(),
           },
           { merge: true },
         );
+
+        const approved = await assertDriverRole(user.uid);
+        if (!approved && !cancelled) {
+          setLoading(false);
+        }
+      } catch (error: any) {
+        if (!cancelled) {
+          console.error("Redirect sign-in failed:", error);
+          Alert.alert("Google Auth Failed", error.message);
+          setLoading(false);
+        }
+      }
+    };
+
+    void completeRedirectSignIn();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // --- THE SMART GOOGLE LOGIN HANDLER ---
+  const handleGoogleSignIn = async () => {
+    if (Platform.OS === "web") {
+      // WEB FLOW.
+      // The popup flow is blocked by Cross-Origin-Opener-Policy: Firebase
+      // cannot see when the popup closes, so the sign-in never resolves.
+      // Redirect avoids opening a second window. The result is handled by
+      // the effect below when the browser returns.
+      setLoading(true);
+      try {
+        const provider = new GoogleAuthProvider();
+        await signInWithRedirect(auth, provider);
+        return;
       } catch (error: any) {
         console.error("Web Google Login Error:", error);
         Alert.alert("Google Auth Failed", error.message);
@@ -138,23 +264,49 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       if (isLogin) {
-        await signInWithEmailAndPassword(auth, email, password);
+        const cred = await signInWithEmailAndPassword(auth, email, password);
+        const approved = await assertDriverRole(cred.user.uid);
+        if (!approved) {
+          setLoading(false);
+          return;
+        }
       } else {
         const userCredential = await createUserWithEmailAndPassword(
           auth,
           email,
           password,
         );
-        // Create new driver profile in Firestore
+
+        // Create the profile WITHOUT a role. Roles are granted by an
+        // administrator only, so a rider cannot self-assign driver access.
         await setDoc(doc(db, "users", userCredential.user.uid), {
           email: email.trim(),
           name: name.trim(),
           phone: phone.trim(),
           vehicleType: vehicleType.trim(),
           vehiclePlate: vehiclePlate.trim(),
-          role: "driver",
           createdAt: new Date().toISOString(),
         });
+
+        // Submit a request for an admin to review.
+        await setDoc(doc(db, "driverRequests", userCredential.user.uid), {
+          userUid: userCredential.user.uid,
+          email: email.trim(),
+          name: name.trim(),
+          phone: phone.trim(),
+          vehicleType: vehicleType.trim(),
+          vehiclePlate: vehiclePlate.trim(),
+          status: "pending",
+          requestedAt: new Date().toISOString(),
+        });
+
+        await auth.signOut();
+        setLoading(false);
+        Alert.alert(
+          "Account created",
+          "Your driver account is waiting for admin approval. You can log in once it has been approved.",
+        );
+        setIsLogin(true);
       }
     } catch (error: any) {
       Alert.alert("Auth Failed", error.message);

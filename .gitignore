@@ -1,0 +1,8 @@
+﻿node_modules/
+dist/
+.expo/
+.firebase/
+*.log
+.env
+env
+serviceAccountKey.json

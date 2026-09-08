@@ -13,6 +13,7 @@ import {
   serverTimestamp,
   setDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import React, { useMemo, useState } from "react";
 import {
@@ -1405,12 +1406,28 @@ export default function BookServiceScreen() {
       };
 
       const orderRef = doc(collection(db, "laundryShops", selectedShop.id, "orders"));
-      await setDoc(orderRef, {
+
+      // The transaction record deliberately reuses the order id. This gives
+      // every order exactly one transaction, removes the need to query by
+      // orderId when syncing status later, and makes a duplicate impossible.
+      const transactionRef = doc(db, "transactions", orderRef.id);
+
+      // Both documents are written in one batch so the pair either both
+      // exist or neither does. Previously these were two separate awaits,
+      // so a failure on the second left an order with no transaction and
+      // the booking never appeared on the transactions page.
+      const bookingBatch = writeBatch(db);
+
+      bookingBatch.set(orderRef, {
         ...orderPayload,
         orderId: orderRef.id,
       });
-      await addDoc(collection(db, "transactions"), {
+
+      bookingBatch.set(transactionRef, {
         userUid: userId,
+        customerUid: userId,
+        customerName: fullName,
+        customerNameCurrent: fullName,
         orderId: orderRef.id,
         shopId: selectedShop.id,
         shopName: selectedShop.shopName,
@@ -1425,6 +1442,8 @@ export default function BookServiceScreen() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+
+      await bookingBatch.commit();
       setSuccessMessage(`${readyMessage}${savedNotice} Booking placed successfully.`);
       resetBookingSetup();
       setIsConfirmOpen(false);
@@ -1604,9 +1623,9 @@ export default function BookServiceScreen() {
             {bookingStep === 1 && (
               <>
                 <View style={styles.mainCategorySection}>
-                  <Text style={[styles.sectionTitle, styles.loadSectionTitle]}>Main Category</Text>
+                  <Text style={[styles.sectionTitle, styles.loadSectionTitle]}>What are you washing?</Text>
                   <Text style={styles.helperText}>
-                    Choose if this order is normal load or heavy load.
+                    Heavy load covers thick or bulky items like blankets and jackets.
                   </Text>
 
                   <View style={styles.categoryGrid}>
@@ -1638,7 +1657,13 @@ export default function BookServiceScreen() {
                               </Text>
                             </>
                           ) : (
-                            <Text style={styles.collapsedHint}>Tap to view features</Text>
+                            // Previously this said "Tap to view features",
+                            // which forced the customer to select an option
+                            // just to find out what it was. Showing the
+                            // description lets both cards be compared first.
+                            <Text style={styles.collapsedHint}>
+                              {category.description}
+                            </Text>
                           )}
                         </TouchableOpacity>
                       );
@@ -1703,9 +1728,9 @@ export default function BookServiceScreen() {
 
             {bookingStep === 2 && (
               <>
-                <Text style={styles.sectionTitle}>Service Type</Text>
+                <Text style={styles.sectionTitle}>How soon do you need it?</Text>
                 <Text style={styles.helperText}>
-                  Choose how fast you want it processed.
+                  Express costs more but comes back the same day.
                 </Text>
 
                 {serviceSupportMap.standard ? (
@@ -1724,15 +1749,15 @@ export default function BookServiceScreen() {
                     </View>
                     {selectedServiceType === "standard" ? (
                       <>
-                        <Text style={styles.serviceOptionLine}>- Booking allowed 1-3 days in advance</Text>
+                        <Text style={styles.serviceOptionLine}>•  Booking allowed 1-3 days in advance</Text>
                         <Text style={styles.serviceOptionLine}>
-                          - Same-day booking before {formatHourLabel(cutoffHour)} cutoff
+                          •  Same-day booking before {formatHourLabel(cutoffHour)} cutoff
                         </Text>
-                        <Text style={styles.serviceOptionLine}>- Pickup windows are 3-hour slots</Text>
-                        <Text style={styles.serviceOptionLine}>- Delivery: 1-3 days</Text>
+                        <Text style={styles.serviceOptionLine}>•  Pickup windows are 3-hour slots</Text>
+                        <Text style={styles.serviceOptionLine}>•  Delivery: 1-3 days</Text>
                       </>
                     ) : (
-                      <Text style={styles.collapsedHint}>Tap to view features</Text>
+                      <Text style={styles.collapsedHint}>Back in 1–3 days</Text>
                     )}
                   </TouchableOpacity>
                 ) : null}
@@ -1754,13 +1779,13 @@ export default function BookServiceScreen() {
                     </View>
                     {selectedServiceType === "express" ? (
                       <>
-                        <Text style={styles.serviceOptionLine}>- Same-day booking always available</Text>
-                        <Text style={styles.serviceOptionLine}>- Priority scheduling + flexible options</Text>
-                        <Text style={styles.serviceOptionLine}>- Pickup now or choose a 1-hour slot</Text>
-                        <Text style={styles.serviceOptionLine}>- Same-day pickup and delivery available</Text>
+                        <Text style={styles.serviceOptionLine}>•  Same-day booking always available</Text>
+                        <Text style={styles.serviceOptionLine}>•  Priority scheduling + flexible options</Text>
+                        <Text style={styles.serviceOptionLine}>•  Pickup now or choose a 1-hour slot</Text>
+                        <Text style={styles.serviceOptionLine}>•  Same-day pickup and delivery available</Text>
                       </>
                     ) : (
-                      <Text style={styles.collapsedHint}>Tap to view features</Text>
+                      <Text style={styles.collapsedHint}>Back the same day</Text>
                     )}
                   </TouchableOpacity>
                 ) : null}
@@ -1873,7 +1898,14 @@ export default function BookServiceScreen() {
                   </View>
                 ) : (
                   <>
-                    <Text style={styles.stepPill}>Step {addressStep} of {totalAddressSteps}</Text>
+                    {/* This is the nested address form, not a stage of the
+                        booking itself. It used the same pill style as the main
+                        "Step N of 3" indicator, so two different counters
+                        appeared on screen at once and contradicted each other.
+                        Labelled and styled as a sub-step instead. */}
+                    <Text style={styles.subStepPill}>
+                      Address {addressStep} of {totalAddressSteps}
+                    </Text>
 
                     {addressStep === 1 ? (
                       <>
@@ -2153,31 +2185,53 @@ export default function BookServiceScreen() {
         </ScrollView>
 
         <View style={[styles.bottomActionBar, { bottom: bottomActionOffset }]}>
-          <TouchableOpacity
-            style={[
-              styles.bottomAddButton,
-              !canAddConfiguredToCart && styles.bottomAddButtonDisabled,
-            ]}
-            onPress={() => void handleAddConfiguredToCart()}
-            disabled={!canAddConfiguredToCart}
-          >
-            <Ionicons name="cart-outline" size={18} color="#0B6394" />
-            <Text style={styles.bottomAddButtonText} numberOfLines={1}>Add to Cart</Text>
-          </TouchableOpacity>
+          {/* Shown on every step, not only the last one. The price is the
+              main thing a customer is weighing while choosing load type and
+              speed, so hiding it until the final screen means they configure
+              the whole order without knowing what it costs. */}
+          {!!selectedShop && (
+            <View style={styles.bottomTotalRow}>
+              <View style={styles.bottomTotalTextWrap}>
+                <Text style={styles.bottomTotalLabel}>
+                  {bookingStep >= 3 ? "Estimated total" : "Estimated price"}
+                </Text>
+                <Text style={styles.bottomTotalNote} numberOfLines={1}>
+                  Final price confirmed after weighing
+                </Text>
+              </View>
+              <Text style={styles.bottomTotalAmount} numberOfLines={1}>
+                {selectedShop.priceLabel}
+              </Text>
+            </View>
+          )}
 
-          <TouchableOpacity
-            style={styles.bottomPrimaryButton}
-            onPress={bookingStep < 3 ? goNextStep : () => void handleSubmit()}
-          >
-            <Text style={styles.bottomPrimaryButtonText} numberOfLines={1}>
-              {bookingStep < 3 ? "Continue" : "Place Booking"}
-            </Text>
-            <Ionicons
-              name={bookingStep < 3 ? "arrow-forward" : "checkmark"}
-              size={18}
-              color="#111827"
-            />
-          </TouchableOpacity>
+          <View style={styles.bottomButtonRow}>
+            <TouchableOpacity
+              style={[
+                styles.bottomAddButton,
+                !canAddConfiguredToCart && styles.bottomAddButtonDisabled,
+              ]}
+              onPress={() => void handleAddConfiguredToCart()}
+              disabled={!canAddConfiguredToCart}
+            >
+              <Ionicons name="cart-outline" size={18} color="#0B6394" />
+              <Text style={styles.bottomAddButtonText} numberOfLines={1}>Add to Cart</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.bottomPrimaryButton}
+              onPress={bookingStep < 3 ? goNextStep : () => void handleSubmit()}
+            >
+              <Text style={styles.bottomPrimaryButtonText} numberOfLines={1}>
+                {bookingStep < 3 ? "Continue" : "Confirm booking"}
+              </Text>
+              <Ionicons
+                name={bookingStep < 3 ? "arrow-forward" : "checkmark"}
+                size={18}
+                color="#111827"
+              />
+            </TouchableOpacity>
+          </View>
         </View>
       </KeyboardAvoidingView>
 
@@ -2378,6 +2432,59 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 5,
+  },
+  // These five were referenced in the address form but never defined, so the
+  // Back and Next controls rendered as bare unstyled text and looked broken.
+  addressStepControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 14,
+  },
+
+  stepButton: {
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "#CBD9E6",
+    backgroundColor: "#FFFFFF",
+  },
+
+  stepButtonDisabled: {
+    opacity: 0.4,
+  },
+
+  stepButtonText: {
+    color: "#33506B",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+
+  stepButtonPrimary: {
+    flex: 1,
+    alignItems: "center",
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 11,
+    backgroundColor: "#0A4E9C",
+  },
+
+  stepButtonPrimaryText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+
+  subStepPill: {
+    // Deliberately quieter than stepPill: a nested form counter should not
+    // compete with the main booking progress indicator.
+    alignSelf: "flex-start",
+    color: "#5B7185",
+    fontWeight: "600",
+    fontSize: 11.5,
+    letterSpacing: 0.1,
+    marginBottom: 2,
   },
   stepPill: {
     alignSelf: "flex-start",
@@ -2819,12 +2926,53 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
+  bottomButtonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+
+  bottomTotalRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingHorizontal: 10,
+    paddingTop: 4,
+    paddingBottom: 2,
+  },
+
+  bottomTotalTextWrap: {
+    flexShrink: 1,
+  },
+
+  bottomTotalLabel: {
+    color: "rgba(255,255,255,0.82)",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+
+  bottomTotalNote: {
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 10.5,
+    marginTop: 1,
+  },
+
+  bottomTotalAmount: {
+    color: "#FFFFFF",
+    fontSize: 19,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+    flexShrink: 0,
+  },
+
   bottomActionBar: {
     position: "absolute",
     left: 18,
     right: 18,
-    flexDirection: "row",
-    alignItems: "center",
+    // Column so the price summary can sit above the buttons.
+    flexDirection: "column",
+    alignItems: "stretch",
     gap: 10,
     padding: 8,
     borderRadius: 20,

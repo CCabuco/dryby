@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Location from "expo-location";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import { onAuthStateChanged, type User } from "firebase/auth";
@@ -23,6 +24,11 @@ import {
 } from "react-native";
 import { isGuestMode, setGuestMode } from "../../lib/app-state";
 import { auth, db } from "../../lib/firebase";
+import {
+  formatDistance,
+  resolveDistanceKm,
+  type Coordinates,
+} from "../../lib/distance";
 import {
   normalizeLaundryService,
   parseLaundryShop,
@@ -128,6 +134,41 @@ function getReviewSummaryLabel(stats: ReviewStats): string {
 export default function LaundryShopScreen() {
   const params = useLocalSearchParams<{ shopId?: string | string[] }>();
   const requestedShopId = Array.isArray(params.shopId) ? params.shopId[0] : params.shopId;
+
+  // Distance is worked out from where the viewer actually is, rather than
+  // read from the shop's stored distanceKm field. If permission is refused
+  // or the location is unavailable this stays null, and the screen shows
+  // "Distance unavailable" instead of a made-up number.
+  const [viewerCoordinates, setViewerCoordinates] =
+    useState<Coordinates | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadViewerLocation = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted" || cancelled) {
+          return;
+        }
+        const position = await Location.getCurrentPositionAsync({});
+        if (cancelled) {
+          return;
+        }
+        setViewerCoordinates({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+      } catch {
+        // Location is optional. Leaving it null is the correct fallback.
+      }
+    };
+
+    void loadViewerLocation();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [shop, setShop] = useState<LaundryShop | null>(null);
   const [services, setServices] = useState<LaundryService[]>([]);
@@ -336,7 +377,11 @@ export default function LaundryShopScreen() {
               <Ionicons name="location-sharp" size={30} color="#8892A0" />
               <View style={styles.rowBody}>
                 <Text style={styles.addressText}>{shop.address || "Address not set"}</Text>
-                <Text style={styles.distanceText}>{shop.distanceKm.toFixed(1)} km away</Text>
+                <Text style={styles.distanceText}>
+                  {formatDistance(
+                    resolveDistanceKm(viewerCoordinates, shop.addressFields)
+                  )}
+                </Text>
               </View>
             </View>
 

@@ -14,6 +14,7 @@ import {
   View,
 } from "react-native";
 import { isGuestMode, setGuestMode } from "../../lib/app-state";
+import { formatDistance } from "../../lib/distance";
 import {
   clearCart,
   getCartItems,
@@ -135,7 +136,11 @@ export default function CartScreen() {
                       <Text style={styles.itemTitle}>{item.title}</Text>
                       <Text style={styles.itemAddress}>{item.address}</Text>
                       <View style={styles.itemBottomRow}>
-                        <Text style={styles.itemMeta}>{item.distanceKm.toFixed(1)} km away</Text>
+                        <Text style={styles.itemMeta}>
+                          {Number.isFinite(item.distanceKm) && item.distanceKm > 0
+                            ? formatDistance(item.distanceKm)
+                            : "Distance unavailable"}
+                        </Text>
                         <Text style={styles.itemMeta}>Qty: {item.quantity}</Text>
                       </View>
                       <TouchableOpacity
@@ -201,7 +206,9 @@ export default function CartScreen() {
 
             <View style={styles.modalMetaRow}>
               <Text style={styles.modalMetaText}>
-                {selectedItem ? `${selectedItem.distanceKm.toFixed(1)} km away` : ""}
+                {selectedItem && Number.isFinite(selectedItem.distanceKm) && selectedItem.distanceKm > 0
+                  ? formatDistance(selectedItem.distanceKm)
+                  : ""}
               </Text>
               <Text style={styles.modalMetaText}>
                 Qty: {selectedItem?.quantity ?? 0}

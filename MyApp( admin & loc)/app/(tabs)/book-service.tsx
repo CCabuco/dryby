@@ -13,6 +13,7 @@ import {
   serverTimestamp,
   setDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import React, { useMemo, useState } from "react";
 import {
@@ -1119,9 +1120,26 @@ export default function BookServiceScreen() {
         updatedAt: serverTimestamp(),
       };
 
-      await addDoc(collection(db, "laundryShops", selectedShop.id, "orders"), orderPayload);
-      await addDoc(collection(db, "transactions"), {
+      const orderRef = doc(collection(db, "laundryShops", selectedShop.id, "orders"));
+
+      // The transaction record reuses the order id so the two stay linked.
+      const transactionRef = doc(db, "transactions", orderRef.id);
+
+      // Written as one batch so the order and its transaction either both
+      // exist or neither does. Previously these were separate awaits with
+      // no shared id, so a booking could exist with no matching transaction
+      // and nothing to join them by afterwards.
+      const bookingBatch = writeBatch(db);
+
+      bookingBatch.set(orderRef, {
+        ...orderPayload,
+        orderId: orderRef.id,
+      });
+
+      bookingBatch.set(transactionRef, {
         userUid: userId,
+        customerUid: userId,
+        orderId: orderRef.id,
         shopId: selectedShop.id,
         shopName: selectedShop.shopName,
         serviceType: orderPayload.serviceType,
@@ -1131,9 +1149,12 @@ export default function BookServiceScreen() {
         deliveryDate: orderPayload.deliveryDate,
         totalAmount: orderPayload.totalAmount,
         status: orderPayload.status,
+        completedAt: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+
+      await bookingBatch.commit();
       setSuccessMessage(`${readyMessage}${savedNotice} Booking placed successfully.`);
       setLoadCategory("");
       setSelectedLoadServiceIds([]);
