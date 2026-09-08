@@ -9,10 +9,12 @@ import {
   signOut,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   type User,
 } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -95,7 +97,110 @@ async function ensureUserDocument(user: User) {
   );
 }
 
+
+/**
+ * Blocks accounts that belong to another portal from using the customer app.
+ *
+ * Drivers and administrators have their own sign-in screens, and their
+ * accounts are not set up for booking. Rather than letting them in and
+ * failing later, refuse the sign-in here and say which app to use.
+ *
+ * Returns true when the account may continue.
+ */
+async function assertCustomerRole(uid: string): Promise<boolean> {
+  try {
+    const snap = await getDoc(doc(db, "users", uid));
+
+    // A brand new account has no role yet, which is a normal customer.
+    if (!snap.exists()) {
+      return true;
+    }
+
+    const role =
+      ((snap.data() as Record<string, unknown>).role as string) || "";
+
+    if (role === "" || role === "customer") {
+      return true;
+    }
+
+    await signOut(auth);
+
+    if (role === "driver") {
+      throw new Error(
+        "This account is registered as a driver. Please sign in through the DryBy Driver app instead.",
+      );
+    }
+
+    if (role === "admin" || role === "super-admin") {
+      throw new Error(
+        "This account is an administrator account. Please use the admin dashboard instead.",
+      );
+    }
+
+    throw new Error(
+      `This account has the role "${role}", which cannot use the customer app.`,
+    );
+  } catch (error: any) {
+    if (error?.code === "permission-denied") {
+      await signOut(auth);
+      throw new Error(
+        "This account does not have permission to use the customer app.",
+      );
+    }
+    throw error;
+  }
+}
+
 export default function LoginScreen() {
+
+  // Completes a social sign-in that used the redirect flow. Runs once when
+  // the browser returns from the provider. Does nothing on a normal load.
+  useEffect(() => {
+    let cancelled = false;
+
+    const completeRedirectSignIn = async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (!result || cancelled) {
+          return;
+        }
+
+        await ensureUserDocument(result.user);
+        await assertCustomerRole(result.user.uid);
+        await setGuestMode(false);
+        await mergeGuestCartToUser(result.user.uid);
+        router.replace("/(tabs)");
+      } catch (error: any) {
+        if (cancelled) {
+          return;
+        }
+        console.error("Redirect sign-in failed:", error);
+
+        let message = "Unable to sign in with provider right now.";
+        if (error?.code === "auth/account-exists-with-different-credential") {
+          message =
+            "This email is already registered with a different sign-in method.";
+        } else if (error?.code === "auth/invalid-credential") {
+          message = "Sign in could not be completed. Please try again.";
+        } else if (error?.code === "auth/unauthorized-domain") {
+          message = "This domain is not authorised for sign in.";
+        } else if (typeof error?.message === "string" && !error.code) {
+          message = error.message;
+        }
+
+        setFormError(message);
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void completeRedirectSignIn();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const { width } = useWindowDimensions();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -278,6 +383,10 @@ export default function LoginScreen() {
       setLockoutUntil(null);
       setLockoutSecondsLeft(0);
       await ensureUserDocument(credential.user);
+
+      // Drivers and admins belong to a different portal.
+      await assertCustomerRole(credential.user.uid);
+
       await setGuestMode(false);
       await mergeGuestCartToUser(credential.user.uid);
       router.replace("/(tabs)");
@@ -334,8 +443,21 @@ export default function LoginScreen() {
         provider.setCustomParameters({ prompt: "select_account" });
       }
 
+      // On web the popup flow is blocked by Cross-Origin-Opener-Policy:
+      // Firebase cannot detect when the popup closes, so the sign-in hangs
+      // and never resolves. Redirect avoids the popup window entirely.
+      // The result is picked up on return by the effect below.
+      if (Platform.OS === "web") {
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+
       const credential = await signInWithPopup(auth, provider);
       await ensureUserDocument(credential.user);
+
+      // Drivers and admins belong to a different portal.
+      await assertCustomerRole(credential.user.uid);
+
       await setGuestMode(false);
       await mergeGuestCartToUser(credential.user.uid);
       router.replace("/(tabs)");
@@ -556,6 +678,7 @@ const styles = StyleSheet.create({
 
   card: {
     width: "100%",
+    maxWidth: 460,
     alignSelf: "center",
     backgroundColor: "#F8FAFC",
     borderRadius: 28,
@@ -630,6 +753,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     textAlign: "left",
+    ...(Platform.OS === "web"
+      ? ({ overflowWrap: "anywhere", wordBreak: "break-word" } as object)
+      : {}),
   },
 
   primaryButton: {

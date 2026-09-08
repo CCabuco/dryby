@@ -20,6 +20,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { isGuestMode } from "../../lib/app-state";
 import { auth, db } from "../../lib/firebase";
+import { formatDistance } from "../../lib/distance";
 import { isShopCurrentlyOpen, parseLaundryShop, type LaundryShop } from "../../lib/laundry-shops";
 
 const DEFAULT_SHOP_IMAGE = require("../../assets/images/slide1.png");
@@ -505,7 +506,7 @@ export default function HomeScreen() {
                       </View>
 
                       <Text style={styles.shopAddress}>
-                        {hasRealtimeDistance ? `${distanceKm.toFixed(1)} km away` : "Distance unavailable"}
+                        {hasRealtimeDistance ? formatDistance(distanceKm) : "Distance unavailable"}
                         {durationText ? ` • ${durationText}` : ""} | {item.address || "Address not set"}
                       </Text>
 

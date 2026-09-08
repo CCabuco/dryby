@@ -34,6 +34,41 @@ import { auth, db } from "../lib/firebase";
 import { parseLaundryShop, type LaundryShop } from "../lib/laundry-shops";
 import { normalizeEmail, sanitizeInput, validateEmail } from "../lib/security";
 
+const ROLE_LABELS: Record<string, string> = {
+  admin: "administrator",
+  driver: "driver",
+  customer: "customer",
+  "super-admin": "super administrator",
+};
+
+/**
+ * Builds the message shown when an account signs in to the wrong portal.
+ * Says what the account actually is and where it should go instead, so the
+ * person is not left guessing why the login was refused.
+ */
+export function describeWrongRole(actualRole: string, requiredRole: string) {
+  const actual = ROLE_LABELS[actualRole] || (actualRole ? actualRole : "customer");
+  const required = ROLE_LABELS[requiredRole] || requiredRole;
+
+  if (!actualRole || actualRole === "customer") {
+    return `Access denied. This is the ${required} portal, but this account is a customer account. Use the main DryBy app to sign in, or ask an administrator to grant you ${required} access.`;
+  }
+
+  return `Access denied. This is the ${required} portal, but this account is registered as a ${actual}. Please sign in through the ${actual} portal instead.`;
+}
+
+type DriverRequest = {
+  id: string;
+  userUid: string;
+  email: string;
+  name: string;
+  phone: string;
+  vehicleType: string;
+  vehiclePlate: string;
+  status: string;
+  requestedAt: string;
+};
+
 type AdminTab = "overview" | "shops" | "users" | "transactions" | "announcements";
 
 type AdminUser = {
@@ -116,6 +151,9 @@ export default function AdminScreen() {
   const [transactions, setTransactions] = useState<AdminTransaction[]>([]);
   const [announcements, setAnnouncements] = useState<AdminAnnouncement[]>([]);
 
+  const [driverRequests, setDriverRequests] = useState<DriverRequest[]>([]);
+  const [processingRequestId, setProcessingRequestId] = useState("");
+
   const [announcementTitle, setAnnouncementTitle] = useState("");
   const [announcementBody, setAnnouncementBody] = useState("");
   const [announcementMessage, setAnnouncementMessage] = useState("");
@@ -172,8 +210,11 @@ export default function AdminScreen() {
           setIsAdmin(true);
           setAccessError("");
         } else {
+          // Wrong role for this portal. Explain why, then end the session
+          // so a customer or driver account cannot sit on the admin screen.
           setIsAdmin(false);
-          setAccessError("This account is not marked as an admin in Firestore.");
+          setAccessError(describeWrongRole(role, "admin"));
+          void signOut(auth);
         }
       } catch {
         if (isMounted) {
@@ -193,6 +234,79 @@ export default function AdminScreen() {
       isMounted = false;
     };
   }, [currentUser]);
+
+  // Riders can no longer grant themselves the driver role, so pending
+  // requests are reviewed here by an administrator.
+  useEffect(() => {
+    if (!isAdmin) {
+      setDriverRequests([]);
+      return;
+    }
+
+    const unsubscribe = onSnapshot(
+      collection(db, "driverRequests"),
+      (snapshot) => {
+        const rows: DriverRequest[] = [];
+        snapshot.forEach((entry) => {
+          const data = entry.data() as Record<string, unknown>;
+          rows.push({
+            id: entry.id,
+            userUid: typeof data.userUid === "string" ? data.userUid : entry.id,
+            email: typeof data.email === "string" ? data.email : "",
+            name: typeof data.name === "string" ? data.name : "",
+            phone: typeof data.phone === "string" ? data.phone : "",
+            vehicleType:
+              typeof data.vehicleType === "string" ? data.vehicleType : "",
+            vehiclePlate:
+              typeof data.vehiclePlate === "string" ? data.vehiclePlate : "",
+            status: typeof data.status === "string" ? data.status : "pending",
+            requestedAt:
+              typeof data.requestedAt === "string" ? data.requestedAt : "",
+          });
+        });
+        setDriverRequests(rows.filter((row) => row.status === "pending"));
+      },
+      (error) => {
+        console.error("Failed to load driver requests:", error);
+      },
+    );
+
+    return () => unsubscribe();
+  }, [isAdmin]);
+
+  const handleApproveDriver = async (request: DriverRequest) => {
+    setProcessingRequestId(request.id);
+    try {
+      // Only an administrator can write the role field.
+      await updateDoc(doc(db, "users", request.userUid), { role: "driver" });
+      await updateDoc(doc(db, "driverRequests", request.id), {
+        status: "approved",
+        reviewedAt: new Date().toISOString(),
+        reviewedBy: auth.currentUser?.uid || "",
+      });
+    } catch (error) {
+      console.error("Approve driver failed:", error);
+    } finally {
+      setProcessingRequestId("");
+    }
+  };
+
+  const handleRejectDriver = async (request: DriverRequest) => {
+    setProcessingRequestId(request.id);
+    try {
+      await updateDoc(doc(db, "driverRequests", request.id), {
+        status: "rejected",
+        reviewedAt: new Date().toISOString(),
+        reviewedBy: auth.currentUser?.uid || "",
+      });
+    } catch (error) {
+      console.error("Reject driver failed:", error);
+    } finally {
+      setProcessingRequestId("");
+    }
+  };
+
+
 
   useEffect(() => {
     if (!isAdmin) {
@@ -584,7 +698,53 @@ export default function AdminScreen() {
 
                 {activeTab === "users" ? (
                   <View style={styles.panel}>
-                    <Text style={styles.sectionHeading}>Users</Text>
+                    <Text style={styles.sectionHeading}>
+                      Driver Requests ({driverRequests.length})
+                    </Text>
+                    {driverRequests.length === 0 ? (
+                      <Text style={styles.listCardMeta}>
+                        No pending driver requests.
+                      </Text>
+                    ) : (
+                      driverRequests.map((request) => (
+                        <View key={request.id} style={styles.listCard}>
+                          <Text style={styles.listCardTitle}>
+                            {request.name || request.email}
+                          </Text>
+                          <Text style={styles.listCardMeta}>
+                            {request.email}
+                          </Text>
+                          <Text style={styles.listCardMeta}>
+                            {request.phone || "No phone"} |{" "}
+                            {request.vehicleType} {request.vehiclePlate}
+                          </Text>
+                          <View style={styles.requestActions}>
+                            <TouchableOpacity
+                              style={styles.approveButton}
+                              disabled={processingRequestId === request.id}
+                              onPress={() => handleApproveDriver(request)}
+                            >
+                              <Text style={styles.approveButtonText}>
+                                {processingRequestId === request.id
+                                  ? "Working..."
+                                  : "Approve"}
+                              </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.rejectButton}
+                              disabled={processingRequestId === request.id}
+                              onPress={() => handleRejectDriver(request)}
+                            >
+                              <Text style={styles.rejectButtonText}>Reject</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ))
+                    )}
+
+                    <Text style={[styles.sectionHeading, { marginTop: 24 }]}>
+                      Users
+                    </Text>
                     {users.map((user) => (
                       <View key={user.id} style={styles.listCard}>
                         <Text style={styles.listCardTitle}>{getUserDisplayName(user)}</Text>
@@ -694,6 +854,31 @@ export default function AdminScreen() {
 }
 
 const styles = StyleSheet.create({
+  requestActions: {
+    flexDirection: "row",
+    marginTop: 12,
+  },
+  approveButton: {
+    backgroundColor: "#0A4E9C",
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 8,
+    marginRight: 8,
+  },
+  approveButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+  },
+  rejectButton: {
+    backgroundColor: "#F1F5F9",
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 8,
+  },
+  rejectButtonText: {
+    color: "#334155",
+    fontWeight: "600",
+  },
   container: {
     flex: 1,
   },

@@ -1057,7 +1057,10 @@ export default function ShopManagementScreen() {
       contactNumber: shopDraft.contactNumber.trim(),
       address: buildAddressLabel(normalizedAddressFields),
       addressFields: normalizedAddressFields,
-      distanceKm: Number.isFinite(shopDraft.distanceKm) ? shopDraft.distanceKm : 0.9,
+      // distanceKm is no longer written. Distance depends on who is
+      // looking, so it is computed at display time from the viewer's
+      // coordinates. The previous hardcoded 0.9 km fallback is what made
+      // shops report a fixed, wrong distance (TC-020).
       openingTime: parseTimeInput(shopDraft.openingTime, "08:00"),
       closingTime: parseTimeInput(shopDraft.closingTime, "19:00"),
       standardCutoffTime: parseTimeInput(shopDraft.standardCutoffTime, "19:00"),
@@ -1300,24 +1303,30 @@ export default function ShopManagementScreen() {
         updatedAt: serverTimestamp(),
       });
 
-      const transactionSnapshot = await getDocs(
-        query(
-          collection(db, "transactions"),
-          where("shopId", "==", shopId),
-          where("orderId", "==", order.id)
-        )
+      // The transaction shares the order id, so it can be addressed
+      // directly instead of queried. setDoc with merge also repairs any
+      // older booking whose transaction record was never created, which
+      // previously left the customer's transactions page out of date.
+      await setDoc(
+        doc(db, "transactions", order.id),
+        {
+          userUid: order.customerUid ?? "",
+          customerUid: order.customerUid ?? "",
+          orderId: order.id,
+          shopId,
+          shopName: order.shopName ?? "",
+          serviceType: order.serviceType ?? "",
+          loadCategory: order.loadCategory ?? "",
+          selectedServices: order.selectedServices ?? [],
+          pickupDate: order.pickupDate ?? "",
+          deliveryDate: order.deliveryDate ?? "",
+          totalAmount: order.totalAmount ?? "",
+          status: nextStatus,
+          completedAt: completedAtField,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
       );
-      if (!transactionSnapshot.empty) {
-        await Promise.all(
-          transactionSnapshot.docs.map((transactionDoc) =>
-            updateDoc(transactionDoc.ref, {
-              status: nextStatus,
-              completedAt: completedAtField,
-              updatedAt: serverTimestamp(),
-            })
-          )
-        );
-      }
 
       if (nextStatus === "completed" && order.customerUid) {
         await setDoc(
